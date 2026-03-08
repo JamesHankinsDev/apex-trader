@@ -1,0 +1,68 @@
+:root {
+  --bg: #050508;
+  --surface: #0c0c14;
+  --border: #1a1a2e;
+  --green: #00ff88;
+  --red: #ff3355;
+  --yellow: #ffcc00;
+  --blue: #4488ff;
+  --muted: #444466;
+  --text: #ccd6f6;
+  --dim: #667799;
+  --font-mono: 'Share Tech Mono', monospace;
+  --font-display: 'Bebas Neue', sans-serif;
+  --font-body: 'DM Sans', sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  overflow-x: hidden;
+}
+
+/* Scanlines */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,136,0.01) 2px, rgba(0,255,136,0.01) 4px);
+  pointer-events: none; z-index: 9999;
+}
+
+/* Grid bg */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image:
+    linear-gradient(rgba(68,136,255,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(68,136,255,0.035) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none; z-index: 0;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+input[type=range] {
+  width: 100%; -webkit-appearance: none; appearance: none;
+  height: 2px; background: var(--border); border-radius: 1px; outline: none; cursor: pointer;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--green); cursor: pointer;
+  box-shadow: 0 0 8px rgba(0,255,136,0.5);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,255,136,0.4); }
+  50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(0,255,136,0); }
+}
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
