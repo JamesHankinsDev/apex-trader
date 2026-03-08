@@ -206,6 +206,32 @@ export default function Dashboard() {
   const totalPnl = pv - sv;
   const todayPct = (todayPnl / tsv) * 100 || 0;
 
+  // Compute biggest gain/loss from trades
+  const trades = status?.trades || [];
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayTrades = trades.filter(
+    (t) => t.pnl != null && new Date(t.time) >= todayStart,
+  );
+  const allClosedTrades = trades.filter((t) => t.pnl != null);
+
+  const biggestGainToday = todayTrades.reduce(
+    (max, t) => (t.pnl > max ? t.pnl : max),
+    0,
+  );
+  const biggestLossToday = todayTrades.reduce(
+    (min, t) => (t.pnl < min ? t.pnl : min),
+    0,
+  );
+  const biggestGainAll = allClosedTrades.reduce(
+    (max, t) => (t.pnl > max ? t.pnl : max),
+    0,
+  );
+  const biggestLossAll = allClosedTrades.reduce(
+    (min, t) => (t.pnl < min ? t.pnl : min),
+    0,
+  );
+
   return (
     <div style={{ position: "relative", zIndex: 1 }}>
       {/* HEADER */}
@@ -289,6 +315,76 @@ export default function Dashboard() {
             <div className={styles.statSub}>{s.sub}</div>
           </div>
         ))}
+      </div>
+
+      {/* MOBILE KPIs */}
+      <div className={styles.mobileKpis}>
+        <div className={styles.mobileKpiRow}>
+          <div className={styles.mobileKpiCard}>
+            <div className={styles.mobileKpiLabel}>TODAY P&L</div>
+            <div
+              className={styles.mobileKpiVal}
+              style={{ color: todayPnl >= 0 ? "var(--green)" : "var(--red)" }}
+            >
+              {todayPnl >= 0 ? "+" : ""}
+              {fmt$(todayPnl)}
+            </div>
+            <div className={styles.mobileKpiSub}>{fmtPct(todayPct)}</div>
+          </div>
+          <div className={styles.mobileKpiCard}>
+            <div className={styles.mobileKpiLabel}>ALL-TIME P&L</div>
+            <div
+              className={styles.mobileKpiVal}
+              style={{ color: totalPnl >= 0 ? "var(--green)" : "var(--red)" }}
+            >
+              {totalPnl >= 0 ? "+" : ""}
+              {fmt$(totalPnl)}
+            </div>
+            <div className={styles.mobileKpiSub}>
+              {fmtPct((totalPnl / sv) * 100 || 0)}
+            </div>
+          </div>
+        </div>
+        <div className={styles.mobileKpiRow}>
+          <div className={styles.mobileKpiCard}>
+            <div className={styles.mobileKpiLabel}>BEST TODAY</div>
+            <div
+              className={styles.mobileKpiVal}
+              style={{ color: biggestGainToday > 0 ? "var(--green)" : "var(--dim)" }}
+            >
+              {biggestGainToday > 0 ? `+${fmt$(biggestGainToday)}` : "—"}
+            </div>
+          </div>
+          <div className={styles.mobileKpiCard}>
+            <div className={styles.mobileKpiLabel}>WORST TODAY</div>
+            <div
+              className={styles.mobileKpiVal}
+              style={{ color: biggestLossToday < 0 ? "var(--red)" : "var(--dim)" }}
+            >
+              {biggestLossToday < 0 ? `-${fmt$(Math.abs(biggestLossToday))}` : "—"}
+            </div>
+          </div>
+        </div>
+        <div className={styles.mobileKpiRow}>
+          <div className={styles.mobileKpiCard}>
+            <div className={styles.mobileKpiLabel}>BEST ALL-TIME</div>
+            <div
+              className={styles.mobileKpiVal}
+              style={{ color: biggestGainAll > 0 ? "var(--green)" : "var(--dim)" }}
+            >
+              {biggestGainAll > 0 ? `+${fmt$(biggestGainAll)}` : "—"}
+            </div>
+          </div>
+          <div className={styles.mobileKpiCard}>
+            <div className={styles.mobileKpiLabel}>WORST ALL-TIME</div>
+            <div
+              className={styles.mobileKpiVal}
+              style={{ color: biggestLossAll < 0 ? "var(--red)" : "var(--dim)" }}
+            >
+              {biggestLossAll < 0 ? `-${fmt$(Math.abs(biggestLossAll))}` : "—"}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* MAIN GRID */}

@@ -230,3 +230,60 @@
   border-radius: 50%; animation: spin 1s linear infinite;
 }
 .connectText { font-family: var(--font-mono); font-size: 13px; color: var(--green); letter-spacing: 4px; }
+
+/* MOBILE KPIs — hidden on desktop */
+.mobileKpis { display: none; }
+.mobileKpiRow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mobileKpiCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px 14px;
+  text-align: center;
+}
+.mobileKpiLabel {
+  font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 2px; color: var(--dim); margin-bottom: 6px;
+}
+.mobileKpiVal {
+  font-family: var(--font-display); font-size: 22px;
+  letter-spacing: 1px; line-height: 1;
+}
+.mobileKpiSub { font-size: 11px; color: var(--dim); margin-top: 4px; }
+
+/* ─── MOBILE RESPONSIVE ─────────────────────────────────── */
+@media (max-width: 768px) {
+  .header { padding: 10px 14px; flex-wrap: wrap; gap: 8px; }
+  .headerRight { flex-wrap: wrap; gap: 6px; }
+  .logo { font-size: 20px; letter-spacing: 3px; }
+  .pill { font-size: 10px; padding: 4px 8px; }
+
+  /* Hide desktop stats bar on mobile */
+  .statsBar { display: none; }
+
+  /* Show mobile KPIs */
+  .mobileKpis { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+
+  /* Stack the 3-column grid vertically */
+  .grid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .panel { border-right: none; border-bottom: 1px solid var(--border); }
+  .rightPanel { border-left: none; }
+
+  .center { min-height: 280px; }
+  .chartArea { padding: 12px 10px 0; }
+
+  /* Simplify trade log columns for small screens */
+  .logRow {
+    grid-template-columns: 60px 50px 50px 1fr;
+    font-size: 10px; padding: 6px 10px;
+  }
+  .logRow span:nth-child(4),
+  .logRow span:nth-child(5) { display: none; }
+
+  .configSection { padding: 10px 12px; }
+  .disclaimer { padding: 4px 12px; font-size: 9px; }
+}
