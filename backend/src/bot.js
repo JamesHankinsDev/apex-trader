@@ -81,6 +81,9 @@ class TradingBot {
       this.addEvent('success', `Bot started in ${this.config.mode.toUpperCase()} mode`);
       this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)}`);
 
+      // Sync existing positions from Alpaca
+      await this.syncPositions();
+
       // Start scan loop
       this.runScan();
       this.scanTimer = setInterval(() => this.runScan(), this.config.scanInterval * 1000);
@@ -116,6 +119,65 @@ class TradingBot {
     this.config.secretKey = secretKey;
     if (mode) this.config.mode = mode;
     return { ok: true };
+  }
+
+  // ─── POSITION SYNC ──────────────────────────────────────────────
+
+  async syncPositions() {
+    try {
+      const positions = await alpaca.getPositions(
+        this.config.apiKey, this.config.secretKey, this.config.mode
+      );
+
+      // Track which symbols Alpaca reports
+      const alpacaSymbols = new Set();
+
+      for (const pos of positions) {
+        // Alpaca returns symbol as "BTCUSD", convert to "BTC/USD"
+        const raw = pos.symbol;
+        const symbol = raw.length > 3 && !raw.includes('/')
+          ? raw.replace(/USD$/, '/USD')
+          : raw;
+        alpacaSymbols.add(symbol);
+
+        // Only add if not already tracked by the bot
+        if (!this.state.positions[symbol]) {
+          const entryPrice = parseFloat(pos.avg_entry_price);
+          const qty = parseFloat(pos.qty);
+          const notional = entryPrice * qty;
+
+          this.state.positions[symbol] = {
+            symbol,
+            orderId: null,
+            entryPrice,
+            qty,
+            notional,
+            entryCost: notional * SPREAD_COST_PCT,
+            entryTime: new Date().toISOString(),
+            stopPrice: entryPrice * (1 - this.config.stopLoss),
+            targetPrice: entryPrice * (1 + this.config.takeProfit),
+            synced: true,
+          };
+
+          this.addEvent('info',
+            `Synced position: ${symbol} | ${qty.toFixed(6)} @ $${entryPrice.toFixed(4)} | P&L: ${pos.unrealized_pl}`
+          );
+        } else {
+          // Update qty from Alpaca in case of partial fills
+          this.state.positions[symbol].qty = parseFloat(pos.qty);
+        }
+      }
+
+      // Remove bot positions that no longer exist in Alpaca (closed externally)
+      for (const symbol of Object.keys(this.state.positions)) {
+        if (!alpacaSymbols.has(symbol)) {
+          this.addEvent('info', `Position ${symbol} closed externally — removing`);
+          delete this.state.positions[symbol];
+        }
+      }
+    } catch (err) {
+      this.addEvent('warning', `Position sync failed: ${err.message}`);
+    }
   }
 
   // ─── SCAN CYCLE ───────────────────────────────────────────────
@@ -159,6 +221,9 @@ class TradingBot {
     if (best && best.score >= 70 && !this.state.positions[best.symbol] && best.price > 0) {
       await this.executeEntry(best);
     }
+
+    // Sync positions with Alpaca (picks up external changes)
+    await this.syncPositions();
 
     // Refresh account balance
     try {
