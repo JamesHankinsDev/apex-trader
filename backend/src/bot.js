@@ -31,16 +31,19 @@ function savePersistedState(state) {
 // Alpaca crypto spread cost estimate per side (~0.15% each way)
 const SPREAD_COST_PCT = 0.0015;
 
-// Risk management limits
-const MAX_CONCURRENT_POSITIONS = 4;
-const DAILY_LOSS_LIMIT_PCT = 0.05; // Stop trading if down 5% today
+// Risk management limits (configurable via .env)
+const MAX_CONCURRENT_POSITIONS = parseInt(process.env.MAX_POSITIONS) || 3;
+const DAILY_LOSS_LIMIT_PCT = parseFloat(process.env.DAILY_LOSS_LIMIT_PCT) || 0.05;
 
 // Trailing stop: once price is up this %, switch from fixed stop to trailing
-const TRAILING_STOP_ACTIVATE_PCT = 0.03; // Activate after 3% gain
-const TRAILING_STOP_DISTANCE_PCT = 0.04; // Trail 4% behind the high
+const TRAILING_STOP_ACTIVATE_PCT = parseFloat(process.env.TRAILING_STOP_ACTIVATE_PCT) || 0.02;
+const TRAILING_STOP_DISTANCE_PCT = parseFloat(process.env.TRAILING_STOP_DISTANCE_PCT) || 0.025;
 
 // Time-based exit: close positions held longer than this (in hours)
-const MAX_HOLD_HOURS = 48;
+const MAX_HOLD_HOURS = parseInt(process.env.MAX_HOLD_HOURS) || 24;
+
+// Minimum signal score to enter a position
+const ENTRY_SCORE_THRESHOLD = parseInt(process.env.ENTRY_SCORE_THRESHOLD) || 65;
 
 // Poll Alpaca for actual fill price (market orders usually fill within seconds)
 async function getFillPrice(apiKey, secretKey, mode, orderId, fallbackPrice) {
@@ -65,9 +68,9 @@ class TradingBot {
       apiKey: process.env.ALPACA_API_KEY || '',
       secretKey: process.env.ALPACA_SECRET_KEY || '',
       mode: process.env.ALPACA_MODE || 'paper',
-      positionSize: parseFloat(process.env.POSITION_SIZE) || 0.20,
-      stopLoss: parseFloat(process.env.STOP_LOSS) || 0.08,
-      takeProfit: parseFloat(process.env.TAKE_PROFIT) || 0.25,
+      positionSize: parseFloat(process.env.POSITION_SIZE) || 0.33,
+      stopLoss: parseFloat(process.env.STOP_LOSS) || 0.05,
+      takeProfit: parseFloat(process.env.TAKE_PROFIT) || 0.15,
       rsiBuy: parseInt(process.env.RSI_BUY_BELOW) || 35,
       rsiSell: parseInt(process.env.RSI_SELL_ABOVE) || 70,
       scanInterval: parseInt(process.env.SCAN_INTERVAL_SECONDS) || 60,
@@ -296,10 +299,10 @@ class TradingBot {
     if (dailyLossPct <= -DAILY_LOSS_LIMIT_PCT) {
       this.addEvent('danger', `Daily loss limit hit (${(dailyLossPct * 100).toFixed(2)}%) — halting new entries`);
     } else {
-      // Attempt entry on strongest signal (score >= 70, no existing position, under position limit)
+      // Attempt entry on strongest signal (score >= threshold, no existing position, under position limit)
       const openCount = Object.keys(this.state.positions).length;
       const best = signals[0];
-      if (best && best.score >= 70 && !this.state.positions[best.symbol] && best.price > 0) {
+      if (best && best.score >= ENTRY_SCORE_THRESHOLD && !this.state.positions[best.symbol] && best.price > 0) {
         if (openCount >= MAX_CONCURRENT_POSITIONS) {
           this.addEvent('info', `Skipping ${best.symbol} — max ${MAX_CONCURRENT_POSITIONS} positions open`);
         } else {
