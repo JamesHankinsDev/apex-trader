@@ -5,8 +5,14 @@ import styles from "./page.module.css";
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
 // ─── HELPERS ──────────────────────────────────────────────────
-const fmt$ = (v) => `$${Math.abs(v) < 0.01 ? v.toFixed(4) : v.toFixed(2)}`;
-const fmtPct = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+const fmt$ = (v) => {
+  if (v == null || !isFinite(v)) return "$—";
+  return `$${Math.abs(v) < 0.01 ? v.toFixed(4) : v.toFixed(2)}`;
+};
+const fmtPct = (v) => {
+  if (v == null || !isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+};
 const fmtTime = (iso) =>
   iso ? new Date(iso).toLocaleTimeString("en-US", { hour12: false }) : "—";
 
@@ -417,8 +423,8 @@ export default function Dashboard() {
                   {[
                     {
                       l: "PRICE",
-                      v: s.price < 1 ? s.price.toFixed(4) : s.price.toFixed(2),
-                      prefix: "$",
+                      v: s.price != null ? (s.price < 1 ? s.price.toFixed(4) : s.price.toFixed(2)) : "—",
+                      prefix: s.price != null ? "$" : "",
                     },
                     {
                       l: "RSI",
@@ -501,7 +507,7 @@ export default function Dashboard() {
                     {fmt$(curPrice)}
                   </div>
                   <div className={styles.posDetails}>
-                    SL {fmt$(pos.stopPrice)} · TP {fmt$(pos.targetPrice)}
+                    SL {fmt$(pos.stopPrice)} · TP {pos.targetPrice === Infinity || !isFinite(pos.targetPrice) ? "TRAILING" : fmt$(pos.targetPrice)}
                   </div>
                   <div
                     className={styles.posDetails}
