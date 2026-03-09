@@ -119,8 +119,6 @@ class TradingBot {
       );
       this.state.portfolioValue = parseFloat(account.portfolio_value);
       this.state.cashBalance = parseFloat(account.cash);
-      // Snapshot portfolio value as today's baseline (resets at midnight)
-      this.state.todayStartValue = this.state.portfolioValue;
       this.state.todayDate = new Date().toDateString();
 
       // Get all-time start value and equity curve from portfolio history
@@ -134,14 +132,25 @@ class TradingBot {
           const firstEquity = history.equity.find(v => v > 0);
           if (firstEquity) this.state.startValue = firstEquity;
 
+          // Last daily equity = previous day's close (midnight baseline for today P&L)
+          const lastDailyEquity = history.equity[history.equity.length - 1];
+          if (lastDailyEquity > 0) {
+            this.state.todayStartValue = lastDailyEquity;
+          } else {
+            this.state.todayStartValue = this.state.portfolioValue;
+          }
+
           // Seed equity curve with historical data
           this.state.equityHistory = history.timestamp
             .map((ts, i) => ({ t: ts * 1000, v: history.equity[i] }))
             .filter(d => d.v > 0);
+        } else {
+          this.state.todayStartValue = this.state.portfolioValue;
         }
       } catch (err) {
         console.error('Portfolio history fetch failed:', err.message);
         this.state.startValue = this.state.startValue || this.state.portfolioValue;
+        this.state.todayStartValue = this.state.portfolioValue;
       }
       savePersistedState(this.state);
       this.state.startedAt = new Date().toISOString();
