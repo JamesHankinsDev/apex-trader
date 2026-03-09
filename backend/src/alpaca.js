@@ -75,6 +75,15 @@ async function closePosition(apiKey, secretKey, mode, symbol) {
   return res.data;
 }
 
+async function getPortfolioHistory(apiKey, secretKey, mode, params = {}) {
+  const res = await axios.get(`${getBaseUrl(mode)}/v2/account/portfolio/history`, {
+    headers: getHeaders(apiKey, secretKey),
+    params: { period: '1A', timeframe: '1D', ...params },
+    timeout: 8000,
+  });
+  return res.data;
+}
+
 // ── MARKET DATA (Alpaca primary, CoinGecko fallback) ─────────
 
 // Fetch OHLCV bars from Alpaca crypto data API
@@ -186,6 +195,7 @@ module.exports = {
   getAccount,
   getPositions,
   getOrder,
+  getPortfolioHistory,
   placeOrder,
   closePosition,
   getLatestCryptoPrice,

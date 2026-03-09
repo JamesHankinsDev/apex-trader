@@ -146,4 +146,54 @@ function evaluateSignal(symbol, bars, params) {
   };
 }
 
-module.exports = { evaluateSignal, calcRSI, calcSMA, calcVolumeRatio, calcMomentum };
+// Higher-timeframe trend confirmation (e.g., 1h bars)
+// Returns { confirmed, bias, reasons } — confirmed=true means the larger trend agrees with a buy
+function evaluateHigherTimeframe(bars) {
+  if (!bars || bars.length < 5) {
+    return { confirmed: true, bias: 'neutral', reasons: ['Insufficient HTF data — allowing entry'] };
+  }
+
+  const closes = bars.map(b => b.c);
+  const rsi = calcRSI(closes);
+  const sma5 = calcSMA(closes, 5);
+  const sma20 = calcSMA(closes, 20);
+  const momentum = calcMomentum(closes, Math.min(10, closes.length - 1));
+
+  const reasons = [];
+  let score = 0;
+
+  // HTF trend direction (SMA alignment)
+  if (sma5 > sma20) {
+    score += 1;
+    reasons.push('HTF uptrend (SMA5 > SMA20)');
+  } else {
+    score -= 1;
+    reasons.push('HTF downtrend (SMA5 < SMA20)');
+  }
+
+  // HTF RSI — block entry if overbought on higher timeframe
+  if (rsi > 75) {
+    score -= 2;
+    reasons.push(`HTF RSI ${rsi.toFixed(1)} — overbought`);
+  } else if (rsi < 30) {
+    score += 1;
+    reasons.push(`HTF RSI ${rsi.toFixed(1)} — oversold`);
+  }
+
+  // HTF momentum
+  if (momentum > 0.5) {
+    score += 1;
+    reasons.push(`HTF momentum +${momentum.toFixed(2)}%`);
+  } else if (momentum < -1) {
+    score -= 1;
+    reasons.push(`HTF momentum ${momentum.toFixed(2)}%`);
+  }
+
+  const bias = score > 0 ? 'bullish' : score < 0 ? 'bearish' : 'neutral';
+  // Confirmed if not bearish (allow neutral + bullish)
+  const confirmed = score >= 0;
+
+  return { confirmed, bias, reasons };
+}
+
+module.exports = { evaluateSignal, evaluateHigherTimeframe, calcRSI, calcSMA, calcVolumeRatio, calcMomentum };

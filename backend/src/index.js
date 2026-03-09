@@ -64,8 +64,13 @@ app.post('/api/trade', async (req, res) => {
   if (side === 'sell') {
     const pos = bot.state?.positions?.[symbol];
     if (!pos) return res.status(400).json({ ok: false, msg: 'No open position for ' + symbol });
-    const price = pos.entryPrice; // approximate
-    await bot.executeExit(symbol, price, 'MANUAL CLOSE');
+    // Fetch current market price instead of using stale entry price
+    const alpaca = require('./alpaca');
+    const currentPrice = await alpaca.getLatestCryptoPrice(
+      bot.config.apiKey, bot.config.secretKey, symbol
+    );
+    if (!currentPrice) return res.status(500).json({ ok: false, msg: 'Could not fetch current price for ' + symbol });
+    await bot.executeExit(symbol, currentPrice, 'MANUAL CLOSE');
   }
 
   res.json({ ok: true });

@@ -1,9 +1,45 @@
 // src/bot.js - Core trading bot engine
+const fs = require('fs');
+const path = require('path');
 const alpaca = require('./alpaca');
-const { evaluateSignal } = require('./strategy');
+const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
+
+// Persistent state file (survives restarts)
+const STATE_FILE = path.join(__dirname, '..', '.bot-state.json');
+
+function loadPersistedState() {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    }
+  } catch {}
+  return {};
+}
+
+function savePersistedState(state) {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      startValue: state.startValue,
+      wins: state.wins,
+      losses: state.losses,
+      trades: state.trades,
+    }, null, 2));
+  } catch {}
+}
 
 // Alpaca crypto spread cost estimate per side (~0.15% each way)
 const SPREAD_COST_PCT = 0.0015;
+
+// Risk management limits
+const MAX_CONCURRENT_POSITIONS = 3;
+const DAILY_LOSS_LIMIT_PCT = 0.05; // Stop trading if down 5% today
+
+// Trailing stop: once price is up this %, switch from fixed stop to trailing
+const TRAILING_STOP_ACTIVATE_PCT = 0.03; // Activate after 3% gain
+const TRAILING_STOP_DISTANCE_PCT = 0.04; // Trail 4% behind the high
+
+// Time-based exit: close positions held longer than this (in hours)
+const MAX_HOLD_HOURS = 48;
 
 // Poll Alpaca for actual fill price (market orders usually fill within seconds)
 async function getFillPrice(apiKey, secretKey, mode, orderId, fallbackPrice) {
@@ -37,16 +73,17 @@ class TradingBot {
       watchlist: (process.env.WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD,DOGE/USD,AVAX/USD').split(','),
     };
 
+    const saved = loadPersistedState();
     this.state = {
       portfolioValue: 0,
       cashBalance: 0,
       positions: {},      // symbol -> position data
       signals: [],        // latest signals
-      trades: [],         // trade history (last 100)
+      trades: saved.trades || [],         // trade history (last 100)
       equityHistory: [],  // [{t, v}] for chart
-      wins: 0,
-      losses: 0,
-      startValue: 0,
+      wins: saved.wins || 0,
+      losses: saved.losses || 0,
+      startValue: saved.startValue || 0,
       todayStartValue: 0,
       startedAt: null,
       lastScan: null,
@@ -71,9 +108,30 @@ class TradingBot {
       );
       this.state.portfolioValue = parseFloat(account.portfolio_value);
       this.state.cashBalance = parseFloat(account.cash);
-      this.state.startValue = this.state.startValue || this.state.portfolioValue;
       // Use Alpaca's last_equity (previous day close) for accurate today P&L
       this.state.todayStartValue = parseFloat(account.last_equity) || this.state.portfolioValue;
+
+      // Get all-time start value and equity curve from portfolio history
+      try {
+        const history = await alpaca.getPortfolioHistory(
+          this.config.apiKey, this.config.secretKey, this.config.mode,
+          { period: 'all', timeframe: '1D' }
+        );
+        if (history?.equity?.length > 0 && history?.timestamp?.length > 0) {
+          // First non-zero equity value = account starting value
+          const firstEquity = history.equity.find(v => v > 0);
+          if (firstEquity) this.state.startValue = firstEquity;
+
+          // Seed equity curve with historical data
+          this.state.equityHistory = history.timestamp
+            .map((ts, i) => ({ t: ts * 1000, v: history.equity[i] }))
+            .filter(d => d.v > 0);
+        }
+      } catch (err) {
+        console.error('Portfolio history fetch failed:', err.message);
+        this.state.startValue = this.state.startValue || this.state.portfolioValue;
+      }
+      savePersistedState(this.state);
       this.state.startedAt = new Date().toISOString();
 
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
@@ -186,7 +244,6 @@ class TradingBot {
   async runScan() {
     if (!this.running) return;
     this.state.lastScan = new Date().toISOString();
-    this.addEvent('info', `Scanning ${this.config.watchlist.length} pairs...`);
 
     const signals = [];
 
@@ -217,10 +274,38 @@ class TradingBot {
     signals.sort((a, b) => b.score - a.score);
     this.state.signals = signals;
 
-    // Attempt entry on strongest signal (score >= 70, no existing position)
-    const best = signals[0];
-    if (best && best.score >= 70 && !this.state.positions[best.symbol] && best.price > 0) {
-      await this.executeEntry(best);
+    // Check daily loss circuit breaker
+    const dailyLossPct = this.state.todayStartValue > 0
+      ? (this.state.portfolioValue - this.state.todayStartValue) / this.state.todayStartValue
+      : 0;
+    if (dailyLossPct <= -DAILY_LOSS_LIMIT_PCT) {
+      this.addEvent('danger', `Daily loss limit hit (${(dailyLossPct * 100).toFixed(2)}%) — halting new entries`);
+    } else {
+      // Attempt entry on strongest signal (score >= 70, no existing position, under position limit)
+      const openCount = Object.keys(this.state.positions).length;
+      const best = signals[0];
+      if (best && best.score >= 70 && !this.state.positions[best.symbol] && best.price > 0) {
+        if (openCount >= MAX_CONCURRENT_POSITIONS) {
+          this.addEvent('info', `Skipping ${best.symbol} — max ${MAX_CONCURRENT_POSITIONS} positions open`);
+        } else {
+          // Multi-timeframe confirmation: check 1h trend before entering
+          try {
+            const htfBars = await alpaca.getCryptoBars(
+              this.config.apiKey, this.config.secretKey, best.symbol, '1Hour', 30
+            );
+            const htf = evaluateHigherTimeframe(htfBars);
+            if (!htf.confirmed) {
+              this.addEvent('info', `Skipping ${best.symbol} — HTF ${htf.bias} (${htf.reasons.join(', ')})`);
+            } else {
+              await this.executeEntry(best);
+            }
+          } catch (err) {
+            // If HTF data fetch fails, allow entry based on 1-min signal alone
+            this.addEvent('warning', `HTF check failed for ${best.symbol}: ${err.message} — entering anyway`);
+            await this.executeEntry(best);
+          }
+        }
+      }
     }
 
     // Sync positions with Alpaca (picks up external changes)
@@ -297,11 +382,43 @@ class TradingBot {
     if (!pos) return;
 
     const pnlPct = (currentPrice - pos.entryPrice) / pos.entryPrice;
+
+    // Time-based exit: close if held too long
+    const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+    const holdHours = holdMs / (1000 * 60 * 60);
+    if (holdHours >= MAX_HOLD_HOURS) {
+      await this.executeExit(symbol, currentPrice, `TIME EXIT (${Math.round(holdHours)}h)`);
+      return;
+    }
+
+    // Trailing stop: once in profit past activation threshold, trail the stop up
+    if (pnlPct >= TRAILING_STOP_ACTIVATE_PCT) {
+      const trailingStop = currentPrice * (1 - TRAILING_STOP_DISTANCE_PCT);
+      if (trailingStop > pos.stopPrice) {
+        pos.stopPrice = trailingStop;
+        // Also remove the fixed take-profit ceiling so the trailing stop can ride winners
+        pos.targetPrice = Infinity;
+      }
+    }
+
+    // Track highest price seen for position (used by trailing logic above)
+    if (!pos.highPrice || currentPrice > pos.highPrice) {
+      pos.highPrice = currentPrice;
+      // Re-calculate trailing stop from the high water mark
+      if (pnlPct >= TRAILING_STOP_ACTIVATE_PCT) {
+        const trailingFromHigh = pos.highPrice * (1 - TRAILING_STOP_DISTANCE_PCT);
+        if (trailingFromHigh > pos.stopPrice) {
+          pos.stopPrice = trailingFromHigh;
+        }
+      }
+    }
+
     const shouldStop = currentPrice <= pos.stopPrice;
     const shouldTakeProfit = currentPrice >= pos.targetPrice;
 
     if (shouldStop || shouldTakeProfit) {
-      const reason = shouldTakeProfit ? 'TAKE PROFIT' : 'STOP LOSS';
+      const reason = shouldTakeProfit ? 'TAKE PROFIT' :
+        (pnlPct > 0 ? 'TRAILING STOP' : 'STOP LOSS');
       await this.executeExit(symbol, currentPrice, reason);
     }
   }
@@ -358,6 +475,7 @@ class TradingBot {
   recordTrade(trade) {
     this.state.trades.unshift(trade);
     if (this.state.trades.length > 100) this.state.trades.pop();
+    savePersistedState(this.state);
   }
 
   getStatus() {

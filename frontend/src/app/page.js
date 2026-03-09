@@ -199,12 +199,13 @@ export default function Dashboard() {
   };
 
   const running = status?.running;
-  const pv = status?.portfolioValue || 100;
-  const sv = status?.startValue || 100;
-  const tsv = status?.todayStartValue || 100;
-  const todayPnl = pv - tsv;
-  const totalPnl = pv - sv;
-  const todayPct = (todayPnl / tsv) * 100 || 0;
+  const hasData = status?.portfolioValue > 0;
+  const pv = status?.portfolioValue || 0;
+  const sv = status?.startValue || pv;
+  const tsv = status?.todayStartValue || pv;
+  const todayPnl = hasData ? pv - tsv : 0;
+  const totalPnl = hasData ? pv - sv : 0;
+  const todayPct = hasData && tsv > 0 ? (todayPnl / tsv) * 100 : 0;
 
   // Compute biggest gain/loss from trades
   const trades = status?.trades || [];
@@ -468,18 +469,36 @@ export default function Dashboard() {
             <div className={styles.empty}>No open positions</div>
           ) : (
             Object.values(status.positions).map((pos) => {
+              // Find current price from signals for this symbol
+              const sig = (status?.signals || []).find(
+                (s) => s.symbol === pos.symbol,
+              );
+              const curPrice = sig?.price || pos.entryPrice;
               const pnlPct = pos.entryPrice
-                ? ((pos.entryPrice - pos.entryPrice) / pos.entryPrice) * 100
+                ? ((curPrice - pos.entryPrice) / pos.entryPrice) * 100
                 : 0;
+              const pnlVal = (pnlPct / 100) * pos.notional;
               return (
                 <div key={pos.symbol} className={styles.posCard}>
                   <div className={styles.posHeader}>
                     <span className={styles.ticker}>
                       {pos.symbol?.replace("/USD", "")}
                     </span>
-                    <span className={styles.posEntry}>
-                      Entry {fmt$(pos.entryPrice)}
+                    <span
+                      className={styles.posEntry}
+                      style={{
+                        color:
+                          pnlPct >= 0 ? "var(--green)" : "var(--red)",
+                      }}
+                    >
+                      {pnlPct >= 0 ? "+" : ""}
+                      {pnlPct.toFixed(2)}% ({pnlVal >= 0 ? "+" : ""}
+                      {fmt$(pnlVal)})
                     </span>
+                  </div>
+                  <div className={styles.posDetails}>
+                    Entry {fmt$(pos.entryPrice)} · Now{" "}
+                    {fmt$(curPrice)}
                   </div>
                   <div className={styles.posDetails}>
                     SL {fmt$(pos.stopPrice)} · TP {fmt$(pos.targetPrice)}
