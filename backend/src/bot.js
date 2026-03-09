@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
+const benchmark = require('./benchmark');
 
 // Persistent state file (survives restarts)
 const STATE_FILE = path.join(__dirname, '..', '.bot-state.json');
@@ -135,6 +136,18 @@ class TradingBot {
       this.state.startedAt = new Date().toISOString();
 
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
+
+      // Initialize benchmarks (equal-weight & market-cap weighted)
+      try {
+        const apiKey = this.config.apiKey, secretKey = this.config.secretKey;
+        await benchmark.initialize(
+          this.state.startValue,
+          this.config.watchlist,
+          (sym) => alpaca.getLatestCryptoPrice(apiKey, secretKey, sym)
+        );
+      } catch (err) {
+        console.error('Benchmark initialization failed:', err.message);
+      }
 
       this.running = true;
       this.addEvent('success', `Bot started in ${this.config.mode.toUpperCase()} mode`);
@@ -321,6 +334,13 @@ class TradingBot {
       this.state.todayStartValue = parseFloat(account.last_equity) || this.state.todayStartValue;
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
       if (this.state.equityHistory.length > 500) this.state.equityHistory.shift();
+
+      // Update benchmarks with current prices from signals
+      const currentPrices = {};
+      for (const sig of this.state.signals) {
+        if (sig.price > 0) currentPrices[sig.symbol] = sig.price;
+      }
+      benchmark.update(currentPrices);
     } catch {}
   }
 
@@ -478,6 +498,99 @@ class TradingBot {
     savePersistedState(this.state);
   }
 
+  computeRiskMetrics() {
+    const closedTrades = this.state.trades.filter(t => t.pnl != null);
+    const equity = this.state.equityHistory;
+
+    // Profit Factor: gross wins / gross losses
+    let grossWins = 0, grossLosses = 0;
+    const wins = [], losses = [];
+    for (const t of closedTrades) {
+      if (t.pnl > 0) { grossWins += t.pnl; wins.push(t.pnl); }
+      else if (t.pnl < 0) { grossLosses += Math.abs(t.pnl); losses.push(t.pnl); }
+    }
+    const profitFactor = grossLosses > 0 ? grossWins / grossLosses : grossWins > 0 ? Infinity : 0;
+    const avgWin = wins.length > 0 ? wins.reduce((a, b) => a + b, 0) / wins.length : 0;
+    const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b, 0) / losses.length : 0;
+    const avgWinLossRatio = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : avgWin > 0 ? Infinity : 0;
+
+    // Win/Loss Streaks
+    let curStreak = 0, curStreakType = null;
+    let maxWinStreak = 0, maxLossStreak = 0;
+    // Iterate oldest-first (trades are stored newest-first)
+    for (let i = closedTrades.length - 1; i >= 0; i--) {
+      const isWin = closedTrades[i].pnl > 0;
+      const type = isWin ? 'win' : 'loss';
+      if (type === curStreakType) { curStreak++; }
+      else { curStreak = 1; curStreakType = type; }
+      if (isWin && curStreak > maxWinStreak) maxWinStreak = curStreak;
+      if (!isWin && curStreak > maxLossStreak) maxLossStreak = curStreak;
+    }
+
+    // Max Drawdown from equity history
+    let maxDrawdown = 0, maxDrawdownPct = 0;
+    let peak = 0;
+    for (const pt of equity) {
+      if (pt.v > peak) peak = pt.v;
+      const dd = peak - pt.v;
+      if (dd > maxDrawdown) {
+        maxDrawdown = dd;
+        maxDrawdownPct = peak > 0 ? (dd / peak) * 100 : 0;
+      }
+    }
+
+    // Sharpe & Sortino from equity returns
+    // Use period-over-period returns from equity history
+    let sharpeRatio = null, sortinoRatio = null;
+    if (equity.length >= 3) {
+      const returns = [];
+      for (let i = 1; i < equity.length; i++) {
+        if (equity[i - 1].v > 0) {
+          returns.push((equity[i].v - equity[i - 1].v) / equity[i - 1].v);
+        }
+      }
+      if (returns.length >= 2) {
+        const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+        const variance = returns.reduce((sum, r) => sum + (r - meanReturn) ** 2, 0) / returns.length;
+        const stdDev = Math.sqrt(variance);
+
+        // Annualize: assume ~1440 data points per day (1-min scans), 365 days
+        const intervalsPerYear = (365 * 24 * 3600 * 1000) /
+          ((equity[equity.length - 1].t - equity[0].t) / (equity.length - 1) || 60000);
+        const annualizedReturn = meanReturn * intervalsPerYear;
+        const annualizedStd = stdDev * Math.sqrt(intervalsPerYear);
+        const riskFreeRate = 0.05; // 5% annual
+
+        sharpeRatio = annualizedStd > 0 ? (annualizedReturn - riskFreeRate) / annualizedStd : 0;
+
+        // Sortino: only downside deviation
+        const downsideReturns = returns.filter(r => r < 0);
+        if (downsideReturns.length > 0) {
+          const downsideVariance = downsideReturns.reduce((sum, r) => sum + r ** 2, 0) / returns.length;
+          const downsideDev = Math.sqrt(downsideVariance) * Math.sqrt(intervalsPerYear);
+          sortinoRatio = downsideDev > 0 ? (annualizedReturn - riskFreeRate) / downsideDev : 0;
+        } else {
+          sortinoRatio = annualizedReturn > riskFreeRate ? Infinity : 0;
+        }
+      }
+    }
+
+    return {
+      profitFactor: isFinite(profitFactor) ? parseFloat(profitFactor.toFixed(2)) : null,
+      avgWin: parseFloat(avgWin.toFixed(2)),
+      avgLoss: parseFloat(avgLoss.toFixed(2)),
+      avgWinLossRatio: isFinite(avgWinLossRatio) ? parseFloat(avgWinLossRatio.toFixed(2)) : null,
+      maxDrawdown: parseFloat(maxDrawdown.toFixed(2)),
+      maxDrawdownPct: parseFloat(maxDrawdownPct.toFixed(2)),
+      sharpeRatio: sharpeRatio != null && isFinite(sharpeRatio) ? parseFloat(sharpeRatio.toFixed(2)) : null,
+      sortinoRatio: sortinoRatio != null && isFinite(sortinoRatio) ? parseFloat(sortinoRatio.toFixed(2)) : null,
+      currentStreak: curStreak,
+      currentStreakType: curStreakType,
+      maxWinStreak,
+      maxLossStreak,
+    };
+  }
+
   getStatus() {
     const total = this.state.wins + this.state.losses;
     return {
@@ -507,6 +620,8 @@ class TradingBot {
       lastScan: this.state.lastScan,
       startedAt: this.state.startedAt,
       events: this.state.events,
+      benchmarks: benchmark.getStatus(),
+      riskMetrics: this.computeRiskMetrics(),
     };
   }
 }

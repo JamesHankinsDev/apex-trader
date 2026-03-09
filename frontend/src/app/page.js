@@ -17,7 +17,7 @@ const fmtTime = (iso) =>
   iso ? new Date(iso).toLocaleTimeString("en-US", { hour12: false }) : "—";
 
 // ─── EQUITY CHART ─────────────────────────────────────────────
-function EquityChart({ data, startValue }) {
+function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -31,12 +31,36 @@ function EquityChart({ data, startValue }) {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, W, H);
 
+    // Combine all values to compute shared Y-axis range
     const vals = data.map((d) => d.v);
-    const minV = Math.min(...vals) * 0.998;
-    const maxV = Math.max(...vals) * 1.002;
+    const eqVals = equalHistory?.map((d) => d.v) || [];
+    const mcVals = mcapHistory?.map((d) => d.v) || [];
+    const btcVals = btcHistory?.map((d) => d.v) || [];
+    const allVals = [...vals, ...eqVals, ...mcVals, ...btcVals].filter((v) => v > 0);
+    const minV = Math.min(...allVals) * 0.998;
+    const maxV = Math.max(...allVals) * 1.002;
     const range = maxV - minV || 1;
-    const toX = (i) => (i / (data.length - 1)) * W;
     const toY = (v) => H - ((v - minV) / range) * H;
+
+    // Helper to draw a line from a data array
+    const drawLine = (arr, maxPts, color, lineWidth, dashed) => {
+      if (!arr || arr.length < 2) return;
+      const step = Math.max(1, Math.floor(arr.length / maxPts));
+      const pts = arr.filter((_, i) => i % step === 0 || i === arr.length - 1);
+      const toXLocal = (i) => (i / (pts.length - 1)) * W;
+      if (dashed) ctx.setLineDash([6, 4]);
+      else ctx.setLineDash([]);
+      ctx.beginPath();
+      pts.forEach((d, i) =>
+        i === 0 ? ctx.moveTo(toXLocal(i), toY(d.v)) : ctx.lineTo(toXLocal(i), toY(d.v)),
+      );
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    };
+
+    const toX = (i) => (i / (data.length - 1)) * W;
 
     // Grid
     ctx.strokeStyle = "rgba(26,26,46,0.8)";
@@ -65,6 +89,11 @@ function EquityChart({ data, startValue }) {
       ctx.setLineDash([]);
     }
 
+    // Benchmark lines (draw behind portfolio line)
+    drawLine(equalHistory, data.length, "rgba(255,204,0,0.5)", 1.5, true);  // yellow dashed
+    drawLine(mcapHistory, data.length, "rgba(168,85,247,0.5)", 1.5, true);  // purple dashed
+    drawLine(btcHistory, data.length, "rgba(255,153,0,0.5)", 1.5, true);    // orange dashed
+
     const isUp = vals[vals.length - 1] >= vals[0];
     const color = isUp ? "#00ff88" : "#ff3355";
 
@@ -80,7 +109,7 @@ function EquityChart({ data, startValue }) {
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // Line
+    // Portfolio line
     ctx.beginPath();
     data.forEach((d, i) =>
       i === 0 ? ctx.moveTo(toX(i), toY(d.v)) : ctx.lineTo(toX(i), toY(d.v)),
@@ -101,7 +130,32 @@ function EquityChart({ data, startValue }) {
     ctx.strokeStyle = isUp ? "rgba(0,255,136,0.3)" : "rgba(255,51,85,0.3)";
     ctx.lineWidth = 1;
     ctx.stroke();
-  }, [data, startValue]);
+
+    // Legend
+    const legendY = 14;
+    const legendItems = [
+      { label: "Portfolio", color: color, dashed: false },
+      { label: "BTC Hold", color: "rgba(255,153,0,0.8)", dashed: true },
+      { label: "Equal Wt", color: "rgba(255,204,0,0.8)", dashed: true },
+      { label: "Mcap Wt", color: "rgba(168,85,247,0.8)", dashed: true },
+    ];
+    let legendX = W - 340;
+    ctx.font = "10px Share Tech Mono, monospace";
+    for (const item of legendItems) {
+      ctx.beginPath();
+      if (item.dashed) ctx.setLineDash([4, 3]);
+      else ctx.setLineDash([]);
+      ctx.moveTo(legendX, legendY);
+      ctx.lineTo(legendX + 18, legendY);
+      ctx.strokeStyle = item.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = item.color;
+      ctx.fillText(item.label, legendX + 22, legendY + 4);
+      legendX += 85;
+    }
+  }, [data, startValue, equalHistory, mcapHistory, btcHistory]);
 
   return <canvas ref={canvasRef} style={{ display: "block", width: "100%" }} />;
 }
@@ -115,6 +169,7 @@ export default function Dashboard() {
   const [apiKey, setApiKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [mode, setMode] = useState("paper");
+  const [showGuide, setShowGuide] = useState(false);
   const [config, setConfig] = useState({
     positionSize: 80,
     stopLoss: 8,
@@ -277,6 +332,12 @@ export default function Dashboard() {
               LIVE
             </button>
           </div>
+          <button
+            className={styles.guideBtn}
+            onClick={() => setShowGuide(true)}
+          >
+            ? STRATEGY GUIDE
+          </button>
           <div
             className={styles.pill}
             style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
@@ -529,8 +590,105 @@ export default function Dashboard() {
             <EquityChart
               data={status?.equityHistory || [{ t: Date.now(), v: 100 }]}
               startValue={sv}
+              equalHistory={status?.benchmarks?.equalWeight?.history}
+              mcapHistory={status?.benchmarks?.mcapWeight?.history}
+              btcHistory={status?.benchmarks?.btcOnly?.history}
             />
           </div>
+
+          {/* BENCHMARK COMPARISON */}
+          {status?.benchmarks?.initialized && (
+            <div className={styles.benchmarkBar}>
+              {(() => {
+                const bm = status.benchmarks;
+                const portfolioPct = sv > 0 ? ((pv - sv) / sv) * 100 : 0;
+                const btcPct = bm.btcOnly.pctReturn;
+                const eqPct = bm.equalWeight.pctReturn;
+                const mcPct = bm.mcapWeight.pctReturn;
+                const vsBtc = portfolioPct - btcPct;
+                const vsEqual = portfolioPct - eqPct;
+                const vsMcap = portfolioPct - mcPct;
+                return [
+                  {
+                    label: "PORTFOLIO",
+                    val: fmtPct(portfolioPct),
+                    sub: fmt$(pv),
+                    color: portfolioPct >= 0 ? "var(--green)" : "var(--red)",
+                  },
+                  {
+                    label: "BTC HOLD",
+                    val: fmtPct(btcPct),
+                    sub: fmt$(bm.btcOnly.value),
+                    color: btcPct >= 0 ? "#ff9900" : "var(--red)",
+                  },
+                  {
+                    label: "EQUAL WEIGHT",
+                    val: fmtPct(eqPct),
+                    sub: fmt$(bm.equalWeight.value),
+                    color: eqPct >= 0 ? "var(--yellow)" : "var(--red)",
+                  },
+                  {
+                    label: "MCAP WEIGHT",
+                    val: fmtPct(mcPct),
+                    sub: fmt$(bm.mcapWeight.value),
+                    color: mcPct >= 0 ? "rgb(168,85,247)" : "var(--red)",
+                  },
+                  {
+                    label: "VS BTC",
+                    val: `${vsBtc >= 0 ? "+" : ""}${vsBtc.toFixed(2)}%`,
+                    sub: vsBtc >= 0 ? "outperforming" : "underperforming",
+                    color: vsBtc >= 0 ? "var(--green)" : "var(--red)",
+                  },
+                  {
+                    label: "VS EQUAL",
+                    val: `${vsEqual >= 0 ? "+" : ""}${vsEqual.toFixed(2)}%`,
+                    sub: vsEqual >= 0 ? "outperforming" : "underperforming",
+                    color: vsEqual >= 0 ? "var(--green)" : "var(--red)",
+                  },
+                  {
+                    label: "VS MCAP",
+                    val: `${vsMcap >= 0 ? "+" : ""}${vsMcap.toFixed(2)}%`,
+                    sub: vsMcap >= 0 ? "outperforming" : "underperforming",
+                    color: vsMcap >= 0 ? "var(--green)" : "var(--red)",
+                  },
+                ].map((s) => (
+                  <div className={styles.benchmarkBlock} key={s.label}>
+                    <div className={styles.benchmarkLabel}>{s.label}</div>
+                    <div className={styles.benchmarkVal} style={{ color: s.color }}>
+                      {s.val}
+                    </div>
+                    <div className={styles.benchmarkSub}>{s.sub}</div>
+                  </div>
+                ));
+              })()}
+            </div>
+          )}
+
+          {/* RISK METRICS */}
+          {status?.riskMetrics && (status.wins + status.losses) > 0 && (
+            <div className={styles.riskMetricsBar}>
+              {(() => {
+                const rm = status.riskMetrics;
+                const sharpeColor = rm.sharpeRatio == null ? "var(--dim)" : rm.sharpeRatio >= 1 ? "var(--green)" : rm.sharpeRatio >= 0 ? "var(--yellow)" : "var(--red)";
+                const sortinoColor = rm.sortinoRatio == null ? "var(--dim)" : rm.sortinoRatio >= 1.5 ? "var(--green)" : rm.sortinoRatio >= 0 ? "var(--yellow)" : "var(--red)";
+                const pfColor = rm.profitFactor == null ? "var(--dim)" : rm.profitFactor >= 1.5 ? "var(--green)" : rm.profitFactor >= 1 ? "var(--yellow)" : "var(--red)";
+                return [
+                  { label: "SHARPE RATIO", val: rm.sharpeRatio != null ? rm.sharpeRatio.toFixed(2) : "—", sub: "risk-adj. return", color: sharpeColor },
+                  { label: "SORTINO RATIO", val: rm.sortinoRatio != null ? rm.sortinoRatio.toFixed(2) : "—", sub: "downside-adj.", color: sortinoColor },
+                  { label: "MAX DRAWDOWN", val: `-${rm.maxDrawdownPct.toFixed(2)}%`, sub: fmt$(rm.maxDrawdown), color: rm.maxDrawdownPct > 10 ? "var(--red)" : "var(--yellow)" },
+                  { label: "PROFIT FACTOR", val: rm.profitFactor != null ? rm.profitFactor.toFixed(2) : "—", sub: "wins / losses", color: pfColor },
+                  { label: "AVG WIN/LOSS", val: rm.avgWinLossRatio != null ? `${rm.avgWinLossRatio.toFixed(2)}x` : "—", sub: `${fmt$(rm.avgWin)} / ${fmt$(rm.avgLoss)}`, color: rm.avgWinLossRatio >= 1.5 ? "var(--green)" : "var(--yellow)" },
+                  { label: "STREAK", val: rm.currentStreak > 0 ? `${rm.currentStreak} ${rm.currentStreakType === "win" ? "W" : "L"}` : "—", sub: `Best: ${rm.maxWinStreak}W · Worst: ${rm.maxLossStreak}L`, color: rm.currentStreakType === "win" ? "var(--green)" : rm.currentStreakType === "loss" ? "var(--red)" : "var(--dim)" },
+                ].map((s) => (
+                  <div className={styles.riskBlock} key={s.label}>
+                    <div className={styles.benchmarkLabel}>{s.label}</div>
+                    <div className={styles.riskVal} style={{ color: s.color }}>{s.val}</div>
+                    <div className={styles.benchmarkSub}>{s.sub}</div>
+                  </div>
+                ));
+              })()}
+            </div>
+          )}
 
           {/* TRADE LOG */}
           <div className={styles.tradeLog}>
@@ -719,6 +877,103 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* STRATEGY GUIDE OVERLAY */}
+      {showGuide && (
+        <div className={styles.guideOverlay} onClick={() => setShowGuide(false)}>
+          <div className={styles.guidePanel} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.guideHeader}>
+              <span>STRATEGY GUIDE</span>
+              <button className={styles.guideClose} onClick={() => setShowGuide(false)}>X</button>
+            </div>
+            <div className={styles.guideContent}>
+              <section className={styles.guideSection}>
+                <h3>How the Bot Works</h3>
+                <p>
+                  Apex Trader is an automated crypto trading bot that scans your watchlist every 60 seconds,
+                  evaluates technical indicators, and places trades when conditions align. It uses a
+                  <strong> multi-timeframe momentum strategy</strong> — combining short-term signals (1-minute bars)
+                  with longer-term trend confirmation (1-hour bars) to filter out noise.
+                </p>
+                <p>
+                  The bot places <strong>market orders</strong> via the Alpaca API for fast execution.
+                  Each position is protected by a stop loss and take profit target, with a trailing stop
+                  that activates once a position is sufficiently profitable.
+                </p>
+              </section>
+
+              <section className={styles.guideSection}>
+                <h3>Signal Score (0–100)</h3>
+                <p>
+                  Each asset receives a score every scan cycle. A score of <strong>70+</strong> triggers a buy signal.
+                  The score starts at 50 (neutral) and is adjusted by:
+                </p>
+                <div className={styles.guideTable}>
+                  <div className={styles.guideRow}><span>RSI below buy threshold</span><span className={styles.guideGreen}>+25 pts</span></div>
+                  <div className={styles.guideRow}><span>RSI slightly below buy threshold</span><span className={styles.guideGreen}>+10 pts</span></div>
+                  <div className={styles.guideRow}><span>RSI above sell threshold</span><span className={styles.guideRed}>-30 pts</span></div>
+                  <div className={styles.guideRow}><span>SMA5 above SMA20 (uptrend)</span><span className={styles.guideGreen}>+10 pts</span></div>
+                  <div className={styles.guideRow}><span>SMA5 below SMA20 (downtrend)</span><span className={styles.guideRed}>-10 pts</span></div>
+                  <div className={styles.guideRow}><span>Volume spike (&gt;2x average)</span><span className={styles.guideGreen}>+15 pts</span></div>
+                  <div className={styles.guideRow}><span>Volume above average (1.5-2x)</span><span className={styles.guideGreen}>+8 pts</span></div>
+                  <div className={styles.guideRow}><span>Strong momentum (&gt;2%)</span><span className={styles.guideGreen}>+12 pts</span></div>
+                  <div className={styles.guideRow}><span>Moderate momentum (0.5-2%)</span><span className={styles.guideGreen}>+5 pts</span></div>
+                  <div className={styles.guideRow}><span>Negative momentum (&lt;-3%)</span><span className={styles.guideRed}>-15 pts</span></div>
+                  <div className={styles.guideRow}><span>High volatility (ATR &gt;2%)</span><span className={styles.guideGreen}>+5 pts</span></div>
+                </div>
+                <p>
+                  The highest-scoring asset is then checked against the <strong>1-hour timeframe</strong> for trend
+                  confirmation. If the higher timeframe is bearish, the entry is skipped.
+                </p>
+              </section>
+
+              <section className={styles.guideSection}>
+                <h3>Risk Management</h3>
+                <ul>
+                  <li><strong>Max 3 concurrent positions</strong> — limits exposure</li>
+                  <li><strong>Stop Loss</strong> — closes position if price drops below threshold (default -8%)</li>
+                  <li><strong>Take Profit</strong> — closes position at target gain (default +25%)</li>
+                  <li><strong>Trailing Stop</strong> — activates after +3% gain, trails 4% behind the highest price. Replaces the fixed take profit to let winners run.</li>
+                  <li><strong>Time Exit</strong> — forces close after 48 hours to avoid stale positions</li>
+                  <li><strong>Daily Loss Limit</strong> — halts new entries if the portfolio is down 5% for the day</li>
+                </ul>
+              </section>
+
+              <section className={styles.guideSection}>
+                <h3>Indicator Glossary</h3>
+                <div className={styles.guideTable}>
+                  <div className={styles.guideRow}><span><strong>RSI</strong> (Relative Strength Index)</span><span>Momentum oscillator (0-100). Below 30 = oversold (buy signal), above 70 = overbought (sell signal). Measures the speed and magnitude of recent price changes.</span></div>
+                  <div className={styles.guideRow}><span><strong>SMA</strong> (Simple Moving Average)</span><span>Average price over N periods. SMA5 crossing above SMA20 signals a short-term uptrend. Used to confirm the direction of the trend.</span></div>
+                  <div className={styles.guideRow}><span><strong>Volume Ratio</strong></span><span>Current volume divided by average volume. Values above 1.5x indicate unusual activity — often precedes a price move. Higher volume adds conviction to signals.</span></div>
+                  <div className={styles.guideRow}><span><strong>Momentum</strong></span><span>Percentage price change over the last 10 bars. Positive momentum means price is trending up. Strong momentum (&gt;2%) adds significant points to the signal score.</span></div>
+                  <div className={styles.guideRow}><span><strong>ATR</strong> (Average True Range)</span><span>Measures volatility — the average range of price bars. Expressed as a % of price. Higher ATR means more volatile (more opportunity but more risk).</span></div>
+                </div>
+              </section>
+
+              <section className={styles.guideSection}>
+                <h3>Performance Metrics</h3>
+                <div className={styles.guideTable}>
+                  <div className={styles.guideRow}><span><strong>Sharpe Ratio</strong></span><span>Risk-adjusted return. Measures excess return per unit of total volatility. Above 1.0 is good, above 2.0 is excellent. Accounts for both up and down swings.</span></div>
+                  <div className={styles.guideRow}><span><strong>Sortino Ratio</strong></span><span>Like Sharpe but only penalizes downside volatility. More relevant because upside volatility is desirable. Above 1.5 is good, above 3.0 is excellent.</span></div>
+                  <div className={styles.guideRow}><span><strong>Max Drawdown</strong></span><span>The largest peak-to-trough decline in portfolio value. Shows the worst-case scenario you experienced. Lower is better — above 20% is concerning.</span></div>
+                  <div className={styles.guideRow}><span><strong>Profit Factor</strong></span><span>Total gross profits divided by total gross losses. Above 1.0 = profitable, above 1.5 = solid, above 2.0 = excellent. Below 1.0 means losses exceed gains.</span></div>
+                  <div className={styles.guideRow}><span><strong>Avg Win/Loss Ratio</strong></span><span>Average winning trade size divided by average losing trade size. Above 1.0 means wins are larger than losses on average — combined with win rate, this determines overall profitability.</span></div>
+                </div>
+              </section>
+
+              <section className={styles.guideSection}>
+                <h3>Benchmarks</h3>
+                <div className={styles.guideTable}>
+                  <div className={styles.guideRow}><span><strong>BTC Hold</strong></span><span>What you would have earned by simply buying and holding Bitcoin with your starting capital. If the bot cannot beat this, the added complexity is not justified.</span></div>
+                  <div className={styles.guideRow}><span><strong>Equal Weight</strong></span><span>Hypothetical portfolio that invests equally across all watchlist assets. Tests whether your strategy beats naive diversification.</span></div>
+                  <div className={styles.guideRow}><span><strong>Mcap Weight</strong></span><span>Hypothetical portfolio weighted by market capitalization (like an index fund). Dominated by BTC and ETH. Represents the passive &ldquo;buy the market&rdquo; approach.</span></div>
+                  <div className={styles.guideRow}><span><strong>VS Benchmarks</strong></span><span>The difference between your portfolio return and each benchmark. Positive = outperforming (alpha). Negative = underperforming — the benchmark would have been better.</span></div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* DISCLAIMER */}
       <div className={styles.disclaimer}>
