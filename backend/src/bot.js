@@ -32,7 +32,7 @@ function savePersistedState(state) {
 const SPREAD_COST_PCT = 0.0015;
 
 // Risk management limits
-const MAX_CONCURRENT_POSITIONS = 3;
+const MAX_CONCURRENT_POSITIONS = 4;
 const DAILY_LOSS_LIMIT_PCT = 0.05; // Stop trading if down 5% today
 
 // Trailing stop: once price is up this %, switch from fixed stop to trailing
@@ -65,7 +65,7 @@ class TradingBot {
       apiKey: process.env.ALPACA_API_KEY || '',
       secretKey: process.env.ALPACA_SECRET_KEY || '',
       mode: process.env.ALPACA_MODE || 'paper',
-      positionSize: parseFloat(process.env.POSITION_SIZE) || 0.80,
+      positionSize: parseFloat(process.env.POSITION_SIZE) || 0.20,
       stopLoss: parseFloat(process.env.STOP_LOSS) || 0.08,
       takeProfit: parseFloat(process.env.TAKE_PROFIT) || 0.25,
       rsiBuy: parseInt(process.env.RSI_BUY_BELOW) || 35,
@@ -348,7 +348,8 @@ class TradingBot {
 
   async executeEntry(signal) {
     const { symbol, price } = signal;
-    const notional = this.state.cashBalance * this.config.positionSize;
+    const targetNotional = this.state.portfolioValue * this.config.positionSize;
+    const notional = Math.min(targetNotional, this.state.cashBalance);
 
     if (notional < 1) {
       this.addEvent('warning', `Skipping ${symbol} — insufficient cash ($${this.state.cashBalance.toFixed(2)})`);
@@ -382,7 +383,7 @@ class TradingBot {
       };
 
       this.addEvent('success',
-        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} (${(this.config.positionSize*100).toFixed(0)}%) | spread ~$${entryCost.toFixed(2)}`
+        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} (${(this.config.positionSize*100).toFixed(0)}% of portfolio) | spread ~$${entryCost.toFixed(2)}`
       );
 
       this.recordTrade({
