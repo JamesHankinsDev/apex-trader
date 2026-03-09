@@ -59,6 +59,14 @@ async function placeOrder(
   return res.data;
 }
 
+async function getOrder(apiKey, secretKey, mode, orderId) {
+  const res = await axios.get(`${getBaseUrl(mode)}/v2/orders/${orderId}`, {
+    headers: getHeaders(apiKey, secretKey),
+    timeout: 5000,
+  });
+  return res.data;
+}
+
 async function closePosition(apiKey, secretKey, mode, symbol) {
   const sym = symbol.replace("/", "");
   const res = await axios.delete(`${getBaseUrl(mode)}/v2/positions/${sym}`, {
@@ -177,6 +185,7 @@ async function getLatestCryptoPrice(apiKey, secretKey, symbol) {
 module.exports = {
   getAccount,
   getPositions,
+  getOrder,
   placeOrder,
   closePosition,
   getLatestCryptoPrice,

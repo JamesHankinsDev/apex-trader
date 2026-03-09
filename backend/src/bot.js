@@ -2,6 +2,25 @@
 const alpaca = require('./alpaca');
 const { evaluateSignal } = require('./strategy');
 
+// Alpaca crypto spread cost estimate per side (~0.15% each way)
+const SPREAD_COST_PCT = 0.0015;
+
+// Poll Alpaca for actual fill price (market orders usually fill within seconds)
+async function getFillPrice(apiKey, secretKey, mode, orderId, fallbackPrice) {
+  for (let i = 0; i < 5; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const order = await alpaca.getOrder(apiKey, secretKey, mode, orderId);
+      if (order.filled_avg_price) return parseFloat(order.filled_avg_price);
+      if (order.status === 'filled' && order.filled_avg_price) {
+        return parseFloat(order.filled_avg_price);
+      }
+      if (order.status === 'canceled' || order.status === 'expired') break;
+    } catch { break; }
+  }
+  return fallbackPrice;
+}
+
 class TradingBot {
   constructor() {
     this.running = false;
@@ -170,24 +189,32 @@ class TradingBot {
         { symbol, side: 'buy', notional }
       );
 
-      const qty = notional / price;
+      // Get actual fill price from Alpaca instead of using signal price
+      const fillPrice = await getFillPrice(
+        this.config.apiKey, this.config.secretKey, this.config.mode,
+        order.id, price
+      );
+      const entryCost = notional * SPREAD_COST_PCT;
+      const qty = (notional - entryCost) / fillPrice;
+
       this.state.positions[symbol] = {
         symbol,
         orderId: order.id,
-        entryPrice: price,
+        entryPrice: fillPrice,
         qty,
         notional,
+        entryCost,
         entryTime: new Date().toISOString(),
-        stopPrice: price * (1 - this.config.stopLoss),
-        targetPrice: price * (1 + this.config.takeProfit),
+        stopPrice: fillPrice * (1 - this.config.stopLoss),
+        targetPrice: fillPrice * (1 + this.config.takeProfit),
       };
 
       this.addEvent('success',
-        `BUY ${symbol} @ $${price.toFixed(4)} | $${notional.toFixed(2)} (${(this.config.positionSize*100).toFixed(0)}%)`
+        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} (${(this.config.positionSize*100).toFixed(0)}%) | spread ~$${entryCost.toFixed(2)}`
       );
 
       this.recordTrade({
-        symbol, side: 'BUY', qty, price, notional,
+        symbol, side: 'BUY', qty, price: fillPrice, notional,
         time: new Date().toISOString(), pnl: null
       });
 
@@ -217,23 +244,32 @@ class TradingBot {
     if (!pos) return;
 
     try {
-      await alpaca.closePosition(
+      const closeOrder = await alpaca.closePosition(
         this.config.apiKey, this.config.secretKey, this.config.mode, symbol
       );
 
-      const pnl = (price - pos.entryPrice) / pos.entryPrice * pos.notional;
+      // Get actual fill price from the close order
+      const exitPrice = closeOrder?.id
+        ? await getFillPrice(this.config.apiKey, this.config.secretKey, this.config.mode, closeOrder.id, price)
+        : price;
+
+      // P&L = price movement minus spread costs on both sides
+      const exitCost = pos.notional * SPREAD_COST_PCT;
+      const totalCost = (pos.entryCost || 0) + exitCost;
+      const grossPnl = (exitPrice - pos.entryPrice) / pos.entryPrice * pos.notional;
+      const pnl = grossPnl - totalCost;
       const isWin = pnl > 0;
       if (isWin) this.state.wins++; else this.state.losses++;
 
       this.addEvent(
         isWin ? 'success' : 'danger',
-        `${reason}: ${symbol} @ $${price.toFixed(4)} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`
+        `${reason}: ${symbol} @ $${exitPrice.toFixed(4)} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (fees ~$${totalCost.toFixed(2)})`
       );
 
       this.recordTrade({
-        symbol, side: 'SELL', qty: pos.qty, price,
+        symbol, side: 'SELL', qty: pos.qty, price: exitPrice,
         notional: pos.notional, time: new Date().toISOString(),
-        pnl: parseFloat(pnl.toFixed(4)), reason
+        pnl: parseFloat(pnl.toFixed(4)), fees: parseFloat(totalCost.toFixed(4)), reason
       });
 
       delete this.state.positions[symbol];
