@@ -592,7 +592,7 @@ export default function Dashboard() {
                     className={styles.posDetails}
                     style={{ marginTop: 2, color: "var(--dim)" }}
                   >
-                    {fmtTime(pos.entryTime)} · ${pos.notional?.toFixed(2)}{" "}
+                    {pos.entryTime ? new Date(pos.entryTime).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "—"} · ${pos.notional?.toFixed(2)}{" "}
                     invested
                   </div>
                 </div>

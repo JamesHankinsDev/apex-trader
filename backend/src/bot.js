@@ -237,7 +237,7 @@ class TradingBot {
             qty,
             notional,
             entryCost: notional * SPREAD_COST_PCT,
-            entryTime: new Date().toISOString(),
+            entryTime: pos.created_at || new Date().toISOString(),
             stopPrice: entryPrice * (1 - this.config.stopLoss),
             targetPrice: entryPrice * (1 + this.config.takeProfit),
             synced: true,
@@ -306,30 +306,35 @@ class TradingBot {
     if (dailyLossPct <= -this.config.dailyLossLimit) {
       this.addEvent('danger', `Daily loss limit hit (${(dailyLossPct * 100).toFixed(2)}%) — halting new entries`);
     } else {
-      // Attempt entry on strongest signal (score >= threshold, no existing position, under position limit)
-      const openCount = Object.keys(this.state.positions).length;
-      const best = signals[0];
-      if (best && best.score >= this.config.entryScoreThreshold && !this.state.positions[best.symbol] && best.price > 0) {
+      // Attempt entry on all qualifying signals (score >= threshold, no existing position, under position limit)
+      let openCount = Object.keys(this.state.positions).length;
+      for (const candidate of signals) {
         if (openCount >= this.config.maxPositions) {
-          this.addEvent('info', `Skipping ${best.symbol} — max ${this.config.maxPositions} positions open`);
-        } else {
-          // Multi-timeframe confirmation: check 1h trend before entering
-          try {
-            const htfBars = await alpaca.getCryptoBars(
-              this.config.apiKey, this.config.secretKey, best.symbol, '1Hour', 30
-            );
-            const htf = evaluateHigherTimeframe(htfBars);
-            if (!htf.confirmed) {
-              this.addEvent('info', `Skipping ${best.symbol} — HTF ${htf.bias} (${htf.reasons.join(', ')})`);
-            } else {
-              await this.executeEntry(best);
-            }
-          } catch (err) {
-            // If HTF data fetch fails, allow entry based on 1-min signal alone
-            this.addEvent('warning', `HTF check failed for ${best.symbol}: ${err.message} — entering anyway`);
-            await this.executeEntry(best);
-          }
+          break;
         }
+        if (candidate.score < this.config.entryScoreThreshold || candidate.price <= 0) {
+          continue;
+        }
+        if (this.state.positions[candidate.symbol]) {
+          continue;
+        }
+
+        // Multi-timeframe confirmation: check 1h trend before entering
+        try {
+          const htfBars = await alpaca.getCryptoBars(
+            this.config.apiKey, this.config.secretKey, candidate.symbol, '1Hour', 30
+          );
+          const htf = evaluateHigherTimeframe(htfBars);
+          if (!htf.confirmed) {
+            this.addEvent('info', `Skipping ${candidate.symbol} — HTF ${htf.bias} (${htf.reasons.join(', ')})`);
+            continue;
+          }
+        } catch (err) {
+          this.addEvent('warning', `HTF check failed for ${candidate.symbol}: ${err.message} — entering anyway`);
+        }
+
+        await this.executeEntry(candidate);
+        openCount++;
       }
     }
 
