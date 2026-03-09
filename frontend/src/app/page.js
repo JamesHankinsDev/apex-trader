@@ -171,12 +171,18 @@ export default function Dashboard() {
   const [mode, setMode] = useState("paper");
   const [showGuide, setShowGuide] = useState(false);
   const [config, setConfig] = useState({
-    positionSize: 80,
-    stopLoss: 8,
-    takeProfit: 25,
+    positionSize: 33,
+    stopLoss: 5,
+    takeProfit: 15,
     rsiBuy: 35,
     rsiSell: 70,
     scanInterval: 60,
+    maxPositions: 3,
+    dailyLossLimit: 5,
+    trailingStopActivate: 2,
+    trailingStopDistance: 2.5,
+    maxHoldHours: 24,
+    entryScoreThreshold: 65,
   });
 
   // Clock
@@ -215,6 +221,12 @@ export default function Dashboard() {
         rsiBuy: status.config.rsiBuy,
         rsiSell: status.config.rsiSell,
         scanInterval: status.config.scanInterval,
+        maxPositions: status.config.maxPositions,
+        dailyLossLimit: Math.round(status.config.dailyLossLimit * 100),
+        trailingStopActivate: parseFloat((status.config.trailingStopActivate * 100).toFixed(1)),
+        trailingStopDistance: parseFloat((status.config.trailingStopDistance * 100).toFixed(1)),
+        maxHoldHours: status.config.maxHoldHours,
+        entryScoreThreshold: status.config.entryScoreThreshold,
       });
       setMode(status.mode);
     }
@@ -254,6 +266,12 @@ export default function Dashboard() {
         rsiBuy: config.rsiBuy,
         rsiSell: config.rsiSell,
         scanInterval: config.scanInterval,
+        maxPositions: config.maxPositions,
+        dailyLossLimit: config.dailyLossLimit / 100,
+        trailingStopActivate: config.trailingStopActivate / 100,
+        trailingStopDistance: config.trailingStopDistance / 100,
+        maxHoldHours: config.maxHoldHours,
+        entryScoreThreshold: config.entryScoreThreshold,
       }),
     });
     await fetchStatus();
@@ -838,6 +856,87 @@ export default function Dashboard() {
                 />
               </div>
             ))}
+
+            <div className={styles.configLabel} style={{ marginTop: 16 }}>
+              RISK MANAGEMENT
+            </div>
+            {[
+              {
+                key: "maxPositions",
+                label: "Max Positions",
+                min: 1,
+                max: 10,
+                suffix: "",
+              },
+              {
+                key: "entryScoreThreshold",
+                label: "Entry Score Min",
+                min: 50,
+                max: 90,
+                suffix: "",
+              },
+              {
+                key: "dailyLossLimit",
+                label: "Daily Loss Limit",
+                min: 1,
+                max: 15,
+                suffix: "%",
+                prefix: "-",
+              },
+              {
+                key: "trailingStopActivate",
+                label: "Trail Stop Activate",
+                min: 1,
+                max: 10,
+                step: 0.5,
+                suffix: "%",
+                prefix: "+",
+                float: true,
+              },
+              {
+                key: "trailingStopDistance",
+                label: "Trail Stop Distance",
+                min: 1,
+                max: 10,
+                step: 0.5,
+                suffix: "%",
+                float: true,
+              },
+              {
+                key: "maxHoldHours",
+                label: "Max Hold Time",
+                min: 1,
+                max: 168,
+                suffix: "h",
+              },
+            ].map((s) => (
+              <div key={s.key}>
+                <div className={styles.sliderRow}>
+                  <span className={styles.sliderLabel}>{s.label}</span>
+                  <span className={styles.sliderVal}>
+                    {s.prefix || ""}
+                    {config[s.key]}
+                    {s.suffix}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={s.min}
+                  max={s.max}
+                  step={s.step || 1}
+                  value={config[s.key]}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      [s.key]: s.float
+                        ? parseFloat(e.target.value)
+                        : parseInt(e.target.value),
+                    }))
+                  }
+                />
+              </div>
+            ))}
+
             <button className={styles.btnApply} onClick={handleConfigUpdate}>
               APPLY CONFIG
             </button>

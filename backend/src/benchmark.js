@@ -21,6 +21,8 @@ const COINGECKO_IDS = {
   'FTM/USD': 'fantom',
   'ALGO/USD': 'algorand',
   'XLM/USD': 'stellar',
+  'BCH/USD': 'bitcoin-cash',
+  'AAVE/USD': 'aave',
 };
 
 /**

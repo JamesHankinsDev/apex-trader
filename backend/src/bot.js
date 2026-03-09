@@ -75,6 +75,12 @@ class TradingBot {
       rsiSell: parseInt(process.env.RSI_SELL_ABOVE) || 70,
       scanInterval: parseInt(process.env.SCAN_INTERVAL_SECONDS) || 60,
       watchlist: (process.env.WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD,DOGE/USD,AVAX/USD').split(','),
+      maxPositions: MAX_CONCURRENT_POSITIONS,
+      dailyLossLimit: DAILY_LOSS_LIMIT_PCT,
+      trailingStopActivate: TRAILING_STOP_ACTIVATE_PCT,
+      trailingStopDistance: TRAILING_STOP_DISTANCE_PCT,
+      maxHoldHours: MAX_HOLD_HOURS,
+      entryScoreThreshold: ENTRY_SCORE_THRESHOLD,
     };
 
     const saved = loadPersistedState();
@@ -179,7 +185,8 @@ class TradingBot {
   }
 
   updateConfig(newConfig) {
-    const allowed = ['positionSize','stopLoss','takeProfit','rsiBuy','rsiSell','scanInterval','watchlist'];
+    const allowed = ['positionSize','stopLoss','takeProfit','rsiBuy','rsiSell','scanInterval','watchlist',
+      'maxPositions','dailyLossLimit','trailingStopActivate','trailingStopDistance','maxHoldHours','entryScoreThreshold'];
     allowed.forEach(k => { if (newConfig[k] !== undefined) this.config[k] = newConfig[k]; });
 
     // Restart scan timer if interval changed
@@ -296,15 +303,15 @@ class TradingBot {
     const dailyLossPct = this.state.todayStartValue > 0
       ? (this.state.portfolioValue - this.state.todayStartValue) / this.state.todayStartValue
       : 0;
-    if (dailyLossPct <= -DAILY_LOSS_LIMIT_PCT) {
+    if (dailyLossPct <= -this.config.dailyLossLimit) {
       this.addEvent('danger', `Daily loss limit hit (${(dailyLossPct * 100).toFixed(2)}%) — halting new entries`);
     } else {
       // Attempt entry on strongest signal (score >= threshold, no existing position, under position limit)
       const openCount = Object.keys(this.state.positions).length;
       const best = signals[0];
-      if (best && best.score >= ENTRY_SCORE_THRESHOLD && !this.state.positions[best.symbol] && best.price > 0) {
-        if (openCount >= MAX_CONCURRENT_POSITIONS) {
-          this.addEvent('info', `Skipping ${best.symbol} — max ${MAX_CONCURRENT_POSITIONS} positions open`);
+      if (best && best.score >= this.config.entryScoreThreshold && !this.state.positions[best.symbol] && best.price > 0) {
+        if (openCount >= this.config.maxPositions) {
+          this.addEvent('info', `Skipping ${best.symbol} — max ${this.config.maxPositions} positions open`);
         } else {
           // Multi-timeframe confirmation: check 1h trend before entering
           try {
@@ -418,14 +425,14 @@ class TradingBot {
     // Time-based exit: close if held too long
     const holdMs = Date.now() - new Date(pos.entryTime).getTime();
     const holdHours = holdMs / (1000 * 60 * 60);
-    if (holdHours >= MAX_HOLD_HOURS) {
+    if (holdHours >= this.config.maxHoldHours) {
       await this.executeExit(symbol, currentPrice, `TIME EXIT (${Math.round(holdHours)}h)`);
       return;
     }
 
     // Trailing stop: once in profit past activation threshold, trail the stop up
-    if (pnlPct >= TRAILING_STOP_ACTIVATE_PCT) {
-      const trailingStop = currentPrice * (1 - TRAILING_STOP_DISTANCE_PCT);
+    if (pnlPct >= this.config.trailingStopActivate) {
+      const trailingStop = currentPrice * (1 - this.config.trailingStopDistance);
       if (trailingStop > pos.stopPrice) {
         pos.stopPrice = trailingStop;
         // Also remove the fixed take-profit ceiling so the trailing stop can ride winners
@@ -437,8 +444,8 @@ class TradingBot {
     if (!pos.highPrice || currentPrice > pos.highPrice) {
       pos.highPrice = currentPrice;
       // Re-calculate trailing stop from the high water mark
-      if (pnlPct >= TRAILING_STOP_ACTIVATE_PCT) {
-        const trailingFromHigh = pos.highPrice * (1 - TRAILING_STOP_DISTANCE_PCT);
+      if (pnlPct >= this.config.trailingStopActivate) {
+        const trailingFromHigh = pos.highPrice * (1 - this.config.trailingStopDistance);
         if (trailingFromHigh > pos.stopPrice) {
           pos.stopPrice = trailingFromHigh;
         }
@@ -616,6 +623,12 @@ class TradingBot {
         rsiSell: this.config.rsiSell,
         scanInterval: this.config.scanInterval,
         watchlist: this.config.watchlist,
+        maxPositions: this.config.maxPositions,
+        dailyLossLimit: this.config.dailyLossLimit,
+        trailingStopActivate: this.config.trailingStopActivate,
+        trailingStopDistance: this.config.trailingStopDistance,
+        maxHoldHours: this.config.maxHoldHours,
+        entryScoreThreshold: this.config.entryScoreThreshold,
       },
       portfolioValue: this.state.portfolioValue,
       cashBalance: this.state.cashBalance,
