@@ -86,6 +86,7 @@ class TradingBot {
       losses: saved.losses || 0,
       startValue: saved.startValue || 0,
       todayStartValue: 0,
+      todayDate: null,        // tracks current date string for midnight reset
       startedAt: null,
       lastScan: null,
       events: [],         // system event log (last 50)
@@ -109,8 +110,9 @@ class TradingBot {
       );
       this.state.portfolioValue = parseFloat(account.portfolio_value);
       this.state.cashBalance = parseFloat(account.cash);
-      // Use Alpaca's last_equity (previous day close) for accurate today P&L
-      this.state.todayStartValue = parseFloat(account.last_equity) || this.state.portfolioValue;
+      // Snapshot portfolio value as today's baseline (resets at midnight)
+      this.state.todayStartValue = this.state.portfolioValue;
+      this.state.todayDate = new Date().toDateString();
 
       // Get all-time start value and equity curve from portfolio history
       try {
@@ -331,7 +333,13 @@ class TradingBot {
       );
       this.state.portfolioValue = parseFloat(account.portfolio_value);
       this.state.cashBalance = parseFloat(account.cash);
-      this.state.todayStartValue = parseFloat(account.last_equity) || this.state.todayStartValue;
+      // Reset today P&L at midnight
+      const currentDate = new Date().toDateString();
+      if (this.state.todayDate && currentDate !== this.state.todayDate) {
+        this.state.todayStartValue = this.state.portfolioValue;
+        this.state.todayDate = currentDate;
+        this.addEvent('info', `New day — today P&L reset at $${this.state.portfolioValue.toFixed(2)}`);
+      }
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
       if (this.state.equityHistory.length > 500) this.state.equityHistory.shift();
 
