@@ -72,7 +72,8 @@ class TradingBot {
       this.state.portfolioValue = parseFloat(account.portfolio_value);
       this.state.cashBalance = parseFloat(account.cash);
       this.state.startValue = this.state.startValue || this.state.portfolioValue;
-      this.state.todayStartValue = this.state.portfolioValue;
+      // Use Alpaca's last_equity (previous day close) for accurate today P&L
+      this.state.todayStartValue = parseFloat(account.last_equity) || this.state.portfolioValue;
       this.state.startedAt = new Date().toISOString();
 
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
@@ -225,13 +226,14 @@ class TradingBot {
     // Sync positions with Alpaca (picks up external changes)
     await this.syncPositions();
 
-    // Refresh account balance
+    // Refresh account balance from Alpaca
     try {
       const account = await alpaca.getAccount(
         this.config.apiKey, this.config.secretKey, this.config.mode
       );
       this.state.portfolioValue = parseFloat(account.portfolio_value);
       this.state.cashBalance = parseFloat(account.cash);
+      this.state.todayStartValue = parseFloat(account.last_equity) || this.state.todayStartValue;
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
       if (this.state.equityHistory.length > 500) this.state.equityHistory.shift();
     } catch {}
