@@ -312,11 +312,29 @@ class TradingBot {
           rsiSell: this.config.rsiSell,
         });
 
+        // Always fetch live price — bars can be hours stale for low-volume pairs
+        const livePrice = await alpaca.getLatestCryptoPrice(
+          this.config.apiKey, this.config.secretKey, symbol
+        );
+        if (livePrice > 0) {
+          signal.price = livePrice;  // Override stale bar close with live price
+        }
+
+        // Detect stale bars: Alpaca crypto bars typically lag ~90min;
+        // flag as stale only if >2 hours old (truly outdated data)
+        if (bars.length > 0) {
+          const lastBarTime = new Date(bars[bars.length - 1].t).getTime();
+          const barAgeMin = (Date.now() - lastBarTime) / 60000;
+          signal.barAgeMin = Math.round(barAgeMin);
+          signal.stale = barAgeMin > 120;
+        }
+
         signals.push(signal);
 
-        // Check exits for open positions
-        if (this.state.positions[symbol] && signal.price > 0) {
-          await this.checkExit(symbol, signal.price);
+        // Check exits for open positions using live price
+        if (this.state.positions[symbol] && livePrice > 0) {
+          this.state.positions[symbol].livePrice = livePrice;
+          await this.checkExit(symbol, livePrice);
         }
       } catch (err) {
         this.addEvent('danger', `Error scanning ${symbol}: ${err.message}`);
@@ -344,6 +362,11 @@ class TradingBot {
           continue;
         }
         if (this.state.positions[candidate.symbol]) {
+          continue;
+        }
+        // Skip entry when bar data is stale — indicators are unreliable
+        if (candidate.stale) {
+          this.addEvent('warning', `Skipping ${candidate.symbol} — bar data is ${candidate.barAgeMin}min stale`);
           continue;
         }
 
@@ -386,7 +409,7 @@ class TradingBot {
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
       if (this.state.equityHistory.length > 500) this.state.equityHistory.shift();
 
-      // Update benchmarks with current prices from signals
+      // Update benchmarks with live prices from signals (already overridden with live prices)
       const currentPrices = {};
       for (const sig of this.state.signals) {
         if (sig.price > 0) currentPrices[sig.symbol] = sig.price;

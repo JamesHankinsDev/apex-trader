@@ -101,10 +101,12 @@ async function getCryptoBars(
 ) {
   const sym = symbol.includes("/") ? symbol : symbol.replace(/USD$/, "/USD");
   try {
+    // Force recent data by setting start to 2 hours ago (avoids stale bar cache)
+    const start = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
     const res = await axios.get(
       `https://data.alpaca.markets/v1beta3/crypto/us/bars`,
       {
-        params: { symbols: sym, timeframe, limit },
+        params: { symbols: sym, timeframe, limit, start },
         headers: getHeaders(apiKey, secretKey),
         timeout: 8000,
       },

@@ -494,7 +494,12 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
-                {s.reasons?.length > 0 && (
+                {s.stale && (
+                  <div className={styles.reasons} style={{ color: "var(--yellow)" }}>
+                    ⚠ Bar data {s.barAgeMin}min stale — indicators unreliable
+                  </div>
+                )}
+                {s.reasons?.length > 0 && !s.stale && (
                   <div className={styles.reasons}>
                     {s.reasons.slice(0, 2).join(" · ")}
                   </div>
@@ -510,11 +515,11 @@ export default function Dashboard() {
             <div className={styles.empty}>No open positions</div>
           ) : (
             Object.values(status.positions).map((pos) => {
-              // Find current price from signals for this symbol
+              // Use live price (set during scan), fallback to signal bar close
               const sig = (status?.signals || []).find(
                 (s) => s.symbol === pos.symbol,
               );
-              const curPrice = sig?.price || pos.entryPrice;
+              const curPrice = pos.livePrice || sig?.price || pos.entryPrice;
               const pnlPct = pos.entryPrice
                 ? ((curPrice - pos.entryPrice) / pos.entryPrice) * 100
                 : 0;
