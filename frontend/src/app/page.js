@@ -171,7 +171,6 @@ export default function Dashboard() {
   const [mode, setMode] = useState("paper");
   const [showGuide, setShowGuide] = useState(false);
   const [config, setConfig] = useState(null);
-  const configSynced = useRef(false);
 
   // Clock
   useEffect(() => {
@@ -199,26 +198,22 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [fetchStatus]);
 
-  // Sync config from backend on first load and whenever bot starts/stops
+  // Sync config from backend (read-only, set via env variables)
   useEffect(() => {
     if (status?.config) {
-      if (!configSynced.current) {
-        configSynced.current = true;
-        setConfig({
-          positionSize: Math.round(status.config.positionSize * 100),
-          stopLoss: Math.round(status.config.stopLoss * 100),
-          takeProfit: Math.round(status.config.takeProfit * 100),
-          rsiBuy: status.config.rsiBuy,
-          rsiSell: status.config.rsiSell,
-          scanInterval: status.config.scanInterval,
-          maxPositions: status.config.maxPositions,
-          dailyLossLimit: Math.round(status.config.dailyLossLimit * 100),
-          trailingStopActivate: parseFloat((status.config.trailingStopActivate * 100).toFixed(1)),
-          trailingStopDistance: parseFloat((status.config.trailingStopDistance * 100).toFixed(1)),
-          maxHoldHours: status.config.maxHoldHours,
-          entryScoreThreshold: status.config.entryScoreThreshold,
-        });
-      }
+      setConfig({
+        positionSize: Math.round(status.config.positionSize * 100),
+        stopLoss: Math.round(status.config.stopLoss * 100),
+        takeProfit: Math.round(status.config.takeProfit * 100),
+        rsiBuy: status.config.rsiBuy,
+        rsiSell: status.config.rsiSell,
+        scanInterval: status.config.scanInterval,
+        maxPositions: status.config.maxPositions,
+        dailyLossLimit: Math.round(status.config.dailyLossLimit * 100),
+        maxHoldHours: status.config.maxHoldHours,
+        entryScoreThreshold: status.config.entryScoreThreshold,
+        profitGiveback: Math.round(status.config.profitGiveback * 100),
+      });
       setMode(status.mode);
     }
   }, [status]);
@@ -226,15 +221,7 @@ export default function Dashboard() {
   const handleStart = async () => {
     setConnecting(true);
     try {
-      const res = await fetch(`${API}/api/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey: apiKey || undefined,
-          secretKey: secretKey || undefined,
-          mode,
-        }),
-      });
+      await fetch(`${API}/api/start`, { method: "POST" });
       await fetchStatus();
     } finally {
       setConnecting(false);
@@ -243,28 +230,6 @@ export default function Dashboard() {
 
   const handleStop = async () => {
     await fetch(`${API}/api/stop`, { method: "POST" });
-    await fetchStatus();
-  };
-
-  const handleConfigUpdate = async () => {
-    await fetch(`${API}/api/config`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        positionSize: config.positionSize / 100,
-        stopLoss: config.stopLoss / 100,
-        takeProfit: config.takeProfit / 100,
-        rsiBuy: config.rsiBuy,
-        rsiSell: config.rsiSell,
-        scanInterval: config.scanInterval,
-        maxPositions: config.maxPositions,
-        dailyLossLimit: config.dailyLossLimit / 100,
-        trailingStopActivate: config.trailingStopActivate / 100,
-        trailingStopDistance: config.trailingStopDistance / 100,
-        maxHoldHours: config.maxHoldHours,
-        entryScoreThreshold: config.entryScoreThreshold,
-      }),
-    });
     await fetchStatus();
   };
 
@@ -698,8 +663,8 @@ export default function Dashboard() {
                 const sortinoColor = rm.sortinoRatio == null ? "var(--dim)" : rm.sortinoRatio >= 1.5 ? "var(--green)" : rm.sortinoRatio >= 0 ? "var(--yellow)" : "var(--red)";
                 const pfColor = rm.profitFactor == null ? "var(--dim)" : rm.profitFactor >= 1.5 ? "var(--green)" : rm.profitFactor >= 1 ? "var(--yellow)" : "var(--red)";
                 return [
-                  { label: "SHARPE RATIO", val: rm.sharpeRatio != null ? rm.sharpeRatio.toFixed(2) : "—", sub: "risk-adj. return", color: sharpeColor },
-                  { label: "SORTINO RATIO", val: rm.sortinoRatio != null ? rm.sortinoRatio.toFixed(2) : "—", sub: "downside-adj.", color: sortinoColor },
+                  { label: "SHARPE RATIO", val: rm.sharpeRatio != null ? rm.sharpeRatio.toFixed(2) : "—", sub: rm.sharpeRatio == null ? "need more trades" : rm.sharpeRatio >= 2 ? "excellent (≥2.0)" : rm.sharpeRatio >= 1 ? "good (target ≥2.0)" : rm.sharpeRatio >= 0 ? "fair (target ≥1.0)" : "poor (<0)", color: sharpeColor },
+                  { label: "SORTINO RATIO", val: rm.sortinoRatio != null ? rm.sortinoRatio.toFixed(2) : "—", sub: rm.sortinoRatio == null ? "need more trades" : rm.sortinoRatio >= 3 ? "excellent (≥3.0)" : rm.sortinoRatio >= 1.5 ? "good (target ≥3.0)" : rm.sortinoRatio >= 0 ? "fair (target ≥1.5)" : "poor (<0)", color: sortinoColor },
                   { label: "MAX DRAWDOWN", val: `-${rm.maxDrawdownPct.toFixed(2)}%`, sub: fmt$(rm.maxDrawdown), color: rm.maxDrawdownPct > 10 ? "var(--red)" : "var(--yellow)" },
                   { label: "PROFIT FACTOR", val: rm.profitFactor != null ? rm.profitFactor.toFixed(2) : "—", sub: "wins / losses", color: pfColor },
                   { label: "AVG WIN/LOSS", val: rm.avgWinLossRatio != null ? `${rm.avgWinLossRatio.toFixed(2)}x` : "—", sub: `${fmt$(rm.avgWin)} / ${fmt$(rm.avgLoss)}`, color: rm.avgWinLossRatio >= 1.5 ? "var(--green)" : "var(--yellow)" },
@@ -765,102 +730,19 @@ export default function Dashboard() {
         <div className={`${styles.panel} ${styles.rightPanel}`}>
           <div className={styles.panelTitle}>▲ CONFIGURATION</div>
 
-          <div className={styles.configSection}>
-            <div className={styles.configLabel}>ALPACA CREDENTIALS</div>
-            <input
-              className={styles.apiInput}
-              type="text"
-              placeholder="API KEY ID"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              disabled={running}
-            />
-            <input
-              className={styles.apiInput}
-              type="password"
-              placeholder="SECRET KEY"
-              value={secretKey}
-              onChange={(e) => setSecretKey(e.target.value)}
-              disabled={running}
-            />
-            <div className={styles.hint}>
-              Paper: paper-api.alpaca.markets
-              <br />
-              Live: api.alpaca.markets
-            </div>
-          </div>
-
           {config && <div className={styles.configSection}>
             <div className={styles.configLabel}>STRATEGY PARAMETERS</div>
             {[
-              {
-                key: "positionSize",
-                label: "Position Size",
-                min: 10,
-                max: 95,
-                suffix: "%",
-              },
-              {
-                key: "stopLoss",
-                label: "Stop Loss",
-                min: 2,
-                max: 25,
-                suffix: "%",
-                prefix: "-",
-              },
-              {
-                key: "takeProfit",
-                label: "Take Profit",
-                min: 5,
-                max: 100,
-                suffix: "%",
-                prefix: "+",
-              },
-              {
-                key: "rsiBuy",
-                label: "RSI Buy Below",
-                min: 20,
-                max: 50,
-                suffix: "",
-              },
-              {
-                key: "rsiSell",
-                label: "RSI Sell Above",
-                min: 55,
-                max: 85,
-                suffix: "",
-              },
-              {
-                key: "scanInterval",
-                label: "Scan Interval",
-                min: 15,
-                max: 300,
-                step: 15,
-                suffix: "s",
-              },
+              { label: "Position Size", value: `${config.positionSize}%` },
+              { label: "Stop Loss", value: `-${config.stopLoss}%` },
+              { label: "Take Profit", value: `+${config.takeProfit}%` },
+              { label: "RSI Buy Below", value: config.rsiBuy },
+              { label: "RSI Sell Above", value: config.rsiSell },
+              { label: "Scan Interval", value: `${config.scanInterval}s` },
             ].map((s) => (
-              <div key={s.key}>
-                <div className={styles.sliderRow}>
-                  <span className={styles.sliderLabel}>{s.label}</span>
-                  <span className={styles.sliderVal}>
-                    {s.prefix || ""}
-                    {config[s.key]}
-                    {s.suffix}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={s.min}
-                  max={s.max}
-                  step={s.step || 1}
-                  value={config[s.key]}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      [s.key]: parseInt(e.target.value),
-                    }))
-                  }
-                />
+              <div key={s.label} className={styles.configRow}>
+                <span className={styles.configRowLabel}>{s.label}</span>
+                <span className={styles.configRowVal}>{s.value}</span>
               </div>
             ))}
 
@@ -868,85 +750,21 @@ export default function Dashboard() {
               RISK MANAGEMENT
             </div>
             {[
-              {
-                key: "maxPositions",
-                label: "Max Positions",
-                min: 1,
-                max: 10,
-                suffix: "",
-              },
-              {
-                key: "entryScoreThreshold",
-                label: "Entry Score Min",
-                min: 50,
-                max: 90,
-                suffix: "",
-              },
-              {
-                key: "dailyLossLimit",
-                label: "Daily Loss Limit",
-                min: 1,
-                max: 15,
-                suffix: "%",
-                prefix: "-",
-              },
-              {
-                key: "trailingStopActivate",
-                label: "Trail Stop Activate",
-                min: 1,
-                max: 10,
-                step: 0.5,
-                suffix: "%",
-                prefix: "+",
-                float: true,
-              },
-              {
-                key: "trailingStopDistance",
-                label: "Trail Stop Distance",
-                min: 1,
-                max: 10,
-                step: 0.5,
-                suffix: "%",
-                float: true,
-              },
-              {
-                key: "maxHoldHours",
-                label: "Max Hold Time",
-                min: 1,
-                max: 168,
-                suffix: "h",
-              },
+              { label: "Max Positions", value: config.maxPositions },
+              { label: "Entry Score Min", value: config.entryScoreThreshold },
+              { label: "Daily Loss Limit", value: `-${config.dailyLossLimit}%` },
+              { label: "Max Hold Time", value: `${config.maxHoldHours}h` },
+              { label: "Profit Protect", value: `${config.profitGiveback}%` },
             ].map((s) => (
-              <div key={s.key}>
-                <div className={styles.sliderRow}>
-                  <span className={styles.sliderLabel}>{s.label}</span>
-                  <span className={styles.sliderVal}>
-                    {s.prefix || ""}
-                    {config[s.key]}
-                    {s.suffix}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={s.min}
-                  max={s.max}
-                  step={s.step || 1}
-                  value={config[s.key]}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      [s.key]: s.float
-                        ? parseFloat(e.target.value)
-                        : parseInt(e.target.value),
-                    }))
-                  }
-                />
+              <div key={s.label} className={styles.configRow}>
+                <span className={styles.configRowLabel}>{s.label}</span>
+                <span className={styles.configRowVal}>{s.value}</span>
               </div>
             ))}
 
-            <button className={styles.btnApply} onClick={handleConfigUpdate}>
-              APPLY CONFIG
-            </button>
+            <div className={styles.hint} style={{ marginTop: 12 }}>
+              Set via environment variables. Restart bot to apply changes.
+            </div>
           </div>}
 
           <div className={styles.configSection}>

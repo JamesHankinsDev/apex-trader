@@ -32,7 +32,6 @@ function savePersistedState(state) {
       losses: state.losses,
       trades: state.trades,
       positions: serializablePositions,
-      config: state._config,
     }, null, 2));
   } catch {}
 }
@@ -43,10 +42,6 @@ const SPREAD_COST_PCT = 0.0015;
 // Risk management limits (configurable via .env)
 const MAX_CONCURRENT_POSITIONS = parseInt(process.env.MAX_POSITIONS) || 3;
 const DAILY_LOSS_LIMIT_PCT = parseFloat(process.env.DAILY_LOSS_LIMIT_PCT) || 0.05;
-
-// Trailing stop: once price is up this %, switch from fixed stop to trailing
-const TRAILING_STOP_ACTIVATE_PCT = parseFloat(process.env.TRAILING_STOP_ACTIVATE_PCT) || 0.02;
-const TRAILING_STOP_DISTANCE_PCT = parseFloat(process.env.TRAILING_STOP_DISTANCE_PCT) || 0.025;
 
 // Time-based exit: close positions held longer than this (in hours)
 const MAX_HOLD_HOURS = parseInt(process.env.MAX_HOLD_HOURS) || 24;
@@ -86,18 +81,12 @@ class TradingBot {
       watchlist: (process.env.WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD,DOGE/USD,AVAX/USD').split(','),
       maxPositions: MAX_CONCURRENT_POSITIONS,
       dailyLossLimit: DAILY_LOSS_LIMIT_PCT,
-      trailingStopActivate: TRAILING_STOP_ACTIVATE_PCT,
-      trailingStopDistance: TRAILING_STOP_DISTANCE_PCT,
       maxHoldHours: MAX_HOLD_HOURS,
       entryScoreThreshold: ENTRY_SCORE_THRESHOLD,
+      profitGiveback: parseFloat(process.env.PROFIT_GIVEBACK) || 0.25,
     };
 
     const saved = loadPersistedState();
-
-    // Restore persisted config overrides (from UI slider changes)
-    if (saved.config) {
-      Object.assign(this.config, saved.config);
-    }
 
     this.state = {
       portfolioValue: 0,
@@ -116,7 +105,6 @@ class TradingBot {
       startValue: saved.startValue || 0,
       todayStartValue: 0,
       todayDate: null,        // tracks current date string for midnight reset
-      _config: saved.config || null,
       startedAt: null,
       lastScan: null,
       events: [],         // system event log (last 50)
@@ -212,25 +200,6 @@ class TradingBot {
     if (this.scanTimer) { clearInterval(this.scanTimer); this.scanTimer = null; }
     this.addEvent('warning', 'Bot stopped by user');
     return { ok: true, msg: 'Bot stopped' };
-  }
-
-  updateConfig(newConfig) {
-    const allowed = ['positionSize','stopLoss','takeProfit','rsiBuy','rsiSell','scanInterval','watchlist',
-      'maxPositions','dailyLossLimit','trailingStopActivate','trailingStopDistance','maxHoldHours','entryScoreThreshold'];
-    allowed.forEach(k => { if (newConfig[k] !== undefined) this.config[k] = newConfig[k]; });
-
-    // Restart scan timer if interval changed
-    if (newConfig.scanInterval && this.running) {
-      clearInterval(this.scanTimer);
-      this.scanTimer = setInterval(() => this.runScan(), this.config.scanInterval * 1000);
-    }
-
-    // Persist config so it survives restarts
-    this.state._config = {};
-    allowed.forEach(k => { this.state._config[k] = this.config[k]; });
-    savePersistedState(this.state);
-
-    this.addEvent('info', 'Configuration updated');
   }
 
   setCredentials(apiKey, secretKey, mode) {
@@ -484,8 +453,6 @@ class TradingBot {
     const pos = this.state.positions[symbol];
     if (!pos) return;
 
-    const pnlPct = (currentPrice - pos.entryPrice) / pos.entryPrice;
-
     // Time-based exit: close if held too long
     const holdMs = Date.now() - new Date(pos.entryTime).getTime();
     const holdHours = holdMs / (1000 * 60 * 60);
@@ -494,25 +461,19 @@ class TradingBot {
       return;
     }
 
-    // Trailing stop: once in profit past activation threshold, trail the stop up
-    if (pnlPct >= this.config.trailingStopActivate) {
-      const trailingStop = currentPrice * (1 - this.config.trailingStopDistance);
-      if (trailingStop > pos.stopPrice) {
-        pos.stopPrice = trailingStop;
-        // Also remove the fixed take-profit ceiling so the trailing stop can ride winners
-        pos.targetPrice = Infinity;
-      }
-    }
-
-    // Track highest price seen for position (used by trailing logic above)
+    // Track peak price for profit giveback calculation
     if (!pos.highPrice || currentPrice > pos.highPrice) {
       pos.highPrice = currentPrice;
-      // Re-calculate trailing stop from the high water mark
-      if (pnlPct >= this.config.trailingStopActivate) {
-        const trailingFromHigh = pos.highPrice * (1 - this.config.trailingStopDistance);
-        if (trailingFromHigh > pos.stopPrice) {
-          pos.stopPrice = trailingFromHigh;
-        }
+    }
+
+    // Profit giveback: if we've gained, sell when we lose X% of peak profit
+    const peakPnl = (pos.highPrice - pos.entryPrice) / pos.entryPrice;
+    const currentPnl = (currentPrice - pos.entryPrice) / pos.entryPrice;
+    if (peakPnl > 0.01 && currentPnl > 0) {  // only when peak gain > 1% and still in profit
+      const givebackPct = 1 - (currentPnl / peakPnl);
+      if (givebackPct >= this.config.profitGiveback) {
+        await this.executeExit(symbol, currentPrice, `PROFIT PROTECT (peak +${(peakPnl * 100).toFixed(1)}% → +${(currentPnl * 100).toFixed(1)}%)`);
+        return;
       }
     }
 
@@ -520,8 +481,7 @@ class TradingBot {
     const shouldTakeProfit = currentPrice >= pos.targetPrice;
 
     if (shouldStop || shouldTakeProfit) {
-      const reason = shouldTakeProfit ? 'TAKE PROFIT' :
-        (pnlPct > 0 ? 'TRAILING STOP' : 'STOP LOSS');
+      const reason = shouldTakeProfit ? 'TAKE PROFIT' : 'STOP LOSS';
       await this.executeExit(symbol, currentPrice, reason);
     }
   }
@@ -690,10 +650,9 @@ class TradingBot {
         watchlist: this.config.watchlist,
         maxPositions: this.config.maxPositions,
         dailyLossLimit: this.config.dailyLossLimit,
-        trailingStopActivate: this.config.trailingStopActivate,
-        trailingStopDistance: this.config.trailingStopDistance,
         maxHoldHours: this.config.maxHoldHours,
         entryScoreThreshold: this.config.entryScoreThreshold,
+        profitGiveback: this.config.profitGiveback,
       },
       portfolioValue: this.state.portfolioValue,
       cashBalance: this.state.cashBalance,

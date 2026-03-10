@@ -39,13 +39,6 @@ app.post('/api/stop', (req, res) => {
   res.json(result);
 });
 
-// ─── UPDATE CONFIG ────────────────────────────────────────────
-app.put('/api/config', (req, res) => {
-  const { positionSize, stopLoss, takeProfit, rsiBuy, rsiSell, scanInterval, watchlist } = req.body;
-  bot.updateConfig({ positionSize, stopLoss, takeProfit, rsiBuy, rsiSell, scanInterval, watchlist });
-  res.json({ ok: true, config: bot.getStatus().config });
-});
-
 // ─── SET CREDENTIALS ──────────────────────────────────────────
 app.post('/api/credentials', (req, res) => {
   const { apiKey, secretKey, mode } = req.body;
