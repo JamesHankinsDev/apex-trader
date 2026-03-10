@@ -367,6 +367,30 @@ export default function Dashboard() {
         </button>
       </div>
 
+      {/* BTC MACRO GATE INDICATOR */}
+      {(() => {
+        const gate = status?.btcGate || expStatus?.btcGate || exp2Status?.btcGate;
+        if (!gate) return null;
+        return (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "8px 20px",
+            borderBottom: "1px solid var(--border)",
+            background: gate.open ? "rgba(0,255,136,0.05)" : "rgba(255,51,85,0.08)",
+            fontFamily: "var(--font-mono)", fontSize: 12,
+          }}>
+            <span style={{ fontSize: 14 }}>{gate.open ? "\uD83D\uDFE2" : "\uD83D\uDD34"}</span>
+            <span style={{ color: gate.open ? "#00ff88" : "#ff3355", fontWeight: 600 }}>
+              BTC Gate: {gate.open ? "Open" : "Closed"}
+            </span>
+            {!gate.open && <span style={{ color: "#ff6680" }}>— No new entries</span>}
+            <span style={{ color: "#666", marginLeft: "auto" }}>
+              {gate.btcPrice > 0 ? `BTC ${fmt$(gate.btcPrice)} / 50-SMA ${fmt$(gate.sma50)}` : "Loading BTC data..."}
+            </span>
+          </div>
+        );
+      })()}
+
       {/* ═══ MAIN TAB ═══ */}
       {activeTab === "main" && <>
 

@@ -5,6 +5,7 @@ const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluate } = require('./mean-reversion-strategy');
 const cryptoStream = require('./crypto-stream');
+const { isBtcGateOpen } = require('./btcGate');
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment-state.json');
 const SPREAD_COST_PCT = 0.0015;
@@ -294,15 +295,21 @@ class ExperimentBot {
 
     this.state.signals = signals;
 
-    // Entry: buy dips
-    let openCount = Object.keys(this.state.positions).length;
-    for (const sig of signals) {
-      if (openCount >= this.config.maxPositions) break;
-      if (sig.signal !== 'buy') continue;
-      if (this.state.positions[sig.symbol]) continue;
+    // BTC macro gate: skip entries if BTC is below 50-day SMA
+    const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+    if (!gate.open) {
+      this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
+    } else {
+      // Entry: buy dips
+      let openCount = Object.keys(this.state.positions).length;
+      for (const sig of signals) {
+        if (openCount >= this.config.maxPositions) break;
+        if (sig.signal !== 'buy') continue;
+        if (this.state.positions[sig.symbol]) continue;
 
-      await this.executeEntry(sig);
-      openCount++;
+        await this.executeEntry(sig);
+        openCount++;
+      }
     }
 
     // Refresh account

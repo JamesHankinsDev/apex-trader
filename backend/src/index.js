@@ -5,6 +5,7 @@ const cors = require('cors');
 const bot = require('./bot');
 const experimentBot = require('./experiment-bot');
 const experiment2Bot = require('./experiment2-bot');
+const { isBtcGateOpen } = require('./btcGate');
 
 const app = express();
 app.use(express.json());
@@ -19,8 +20,16 @@ app.get('/health', (req, res) => {
 });
 
 // ─── BOT STATUS ───────────────────────────────────────────────
-app.get('/api/status', (req, res) => {
-  res.json(bot.getStatus());
+app.get('/api/status', async (req, res) => {
+  const status = bot.getStatus();
+  try {
+    const apiKey = bot.config.apiKey || process.env.ALPACA_API_KEY;
+    const secretKey = bot.config.secretKey || process.env.ALPACA_SECRET_KEY;
+    if (apiKey && secretKey) {
+      status.btcGate = await isBtcGateOpen(apiKey, secretKey, bot.streamHandle);
+    }
+  } catch {}
+  res.json(status);
 });
 
 // ─── START BOT ────────────────────────────────────────────────
@@ -72,8 +81,16 @@ app.post('/api/trade', async (req, res) => {
 });
 
 // ─── EXPERIMENT BOT ──────────────────────────────────────────
-app.get('/api/experiment/status', (req, res) => {
-  res.json(experimentBot.getStatus());
+app.get('/api/experiment/status', async (req, res) => {
+  const status = experimentBot.getStatus();
+  try {
+    const apiKey = experimentBot.config.apiKey || process.env.EXPERIMENT_1_ALPACA_API_KEY;
+    const secretKey = experimentBot.config.secretKey || process.env.EXPERIMENT_1_ALPACA_SECRET_KEY;
+    if (apiKey && secretKey) {
+      status.btcGate = await isBtcGateOpen(apiKey, secretKey, experimentBot.streamHandle);
+    }
+  } catch {}
+  res.json(status);
 });
 
 app.post('/api/experiment/start', async (req, res) => {
@@ -103,8 +120,16 @@ app.post('/api/experiment/trade', async (req, res) => {
 });
 
 // ─── EXPERIMENT 2 BOT (Momentum Breakout) ───────────────────
-app.get('/api/bot2/status', (req, res) => {
-  res.json(experiment2Bot.getStatus());
+app.get('/api/bot2/status', async (req, res) => {
+  const status = experiment2Bot.getStatus();
+  try {
+    const apiKey = experiment2Bot.config.apiKey || process.env.EXPERIMENT_2_ALPACA_API_KEY;
+    const secretKey = experiment2Bot.config.secretKey || process.env.EXPERIMENT_2_ALPACA_SECRET_KEY;
+    if (apiKey && secretKey) {
+      status.btcGate = await isBtcGateOpen(apiKey, secretKey, experiment2Bot.streamHandle);
+    }
+  } catch {}
+  res.json(status);
 });
 
 app.post('/api/bot2/start', async (req, res) => {

@@ -5,6 +5,7 @@ const alpaca = require('./alpaca');
 const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
 const benchmark = require('./benchmark');
 const cryptoStream = require('./crypto-stream');
+const { isBtcGateOpen } = require('./btcGate');
 
 // Persistent state file (survives restarts)
 const STATE_FILE = path.join(__dirname, '..', '.bot-state.json');
@@ -426,6 +427,11 @@ class TradingBot {
     if (dailyLossPct <= -this.config.dailyLossLimit) {
       this.addEvent('danger', `Daily loss limit hit (${(dailyLossPct * 100).toFixed(2)}%) — halting new entries`);
     } else {
+      // BTC macro gate: skip entries if BTC is below 50-day SMA
+      const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+      if (!gate.open) {
+        this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
+      } else {
       // Attempt entry on all qualifying signals (score >= threshold, no existing position, under position limit)
       let openCount = Object.keys(this.state.positions).length;
       for (const candidate of signals) {
@@ -460,6 +466,7 @@ class TradingBot {
 
         await this.executeEntry(candidate);
         openCount++;
+      }
       }
     }
 

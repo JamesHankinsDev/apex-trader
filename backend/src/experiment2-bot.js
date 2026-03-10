@@ -5,6 +5,7 @@ const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluate } = require('./breakout-strategy');
 const cryptoStream = require('./crypto-stream');
+const { isBtcGateOpen } = require('./btcGate');
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment2-state.json');
 const SPREAD_COST_PCT = 0.0015;
@@ -317,22 +318,28 @@ class Experiment2Bot {
 
     this.state.signals = signals;
 
-    // Entry: only 1 position at a time
-    const openCount = Object.keys(this.state.positions).length;
-    if (openCount < this.config.maxPositions) {
-      for (const sig of signals) {
-        if (sig.signal !== 'buy') continue;
-        if (this.state.positions[sig.symbol]) continue;
+    // BTC macro gate: skip entries if BTC is below 50-day SMA
+    const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+    if (!gate.open) {
+      this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
+    } else {
+      // Entry: only 1 position at a time
+      const openCount = Object.keys(this.state.positions).length;
+      if (openCount < this.config.maxPositions) {
+        for (const sig of signals) {
+          if (sig.signal !== 'buy') continue;
+          if (this.state.positions[sig.symbol]) continue;
 
-        // Check cooldown
-        const cd = this.state.cooldowns[sig.symbol];
-        if (cd && new Date(cd.until) > new Date()) {
-          this.addEvent('info', `Skipping ${sig.symbol} — cooldown until ${new Date(cd.until).toLocaleTimeString()}`);
-          continue;
+          // Check cooldown
+          const cd = this.state.cooldowns[sig.symbol];
+          if (cd && new Date(cd.until) > new Date()) {
+            this.addEvent('info', `Skipping ${sig.symbol} — cooldown until ${new Date(cd.until).toLocaleTimeString()}`);
+            continue;
+          }
+
+          await this.executeEntry(sig);
+          break; // Only one entry per scan
         }
-
-        await this.executeEntry(sig);
-        break; // Only one entry per scan
       }
     }
 
