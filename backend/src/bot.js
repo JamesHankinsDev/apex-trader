@@ -4,6 +4,7 @@ const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
 const benchmark = require('./benchmark');
+const cryptoStream = require('./crypto-stream');
 
 // Persistent state file (survives restarts)
 const STATE_FILE = path.join(__dirname, '..', '.bot-state.json');
@@ -111,6 +112,7 @@ class TradingBot {
     };
 
     this.scanTimer = null;
+    this.streamHandle = null;
   }
 
   // ─── LIFECYCLE ────────────────────────────────────────────────
@@ -169,14 +171,21 @@ class TradingBot {
       // Initialize benchmarks (equal-weight & market-cap weighted)
       try {
         const apiKey = this.config.apiKey, secretKey = this.config.secretKey;
+        const sh = this.streamHandle;
         await benchmark.initialize(
           this.state.startValue,
           this.config.watchlist,
-          (sym) => alpaca.getLatestCryptoPrice(apiKey, secretKey, sym)
+          (sym) => alpaca.getLatestCryptoPrice(apiKey, secretKey, sym, sh)
         );
       } catch (err) {
         console.error('Benchmark initialization failed:', err.message);
       }
+
+      // Connect WebSocket stream for real-time prices
+      this.streamHandle = cryptoStream.connect(
+        this.config.apiKey, this.config.secretKey, this.config.watchlist,
+        (type, msg) => this.addEvent(type, `[Stream] ${msg}`)
+      );
 
       this.running = true;
       this.addEvent('success', `Bot started in ${this.config.mode.toUpperCase()} mode`);
@@ -201,6 +210,7 @@ class TradingBot {
   stop() {
     this.running = false;
     if (this.scanTimer) { clearInterval(this.scanTimer); this.scanTimer = null; }
+    if (this.streamHandle) { cryptoStream.disconnect(this.streamHandle); this.streamHandle = null; }
     this.addEvent('warning', 'Bot stopped by user');
     return { ok: true, msg: 'Bot stopped' };
   }
@@ -376,9 +386,9 @@ class TradingBot {
           rsiSell: this.config.rsiSell,
         });
 
-        // Always fetch live price — bars can be hours stale for low-volume pairs
+        // Always fetch live price — stream first, REST fallback
         const livePrice = await alpaca.getLatestCryptoPrice(
-          this.config.apiKey, this.config.secretKey, symbol
+          this.config.apiKey, this.config.secretKey, symbol, this.streamHandle
         );
         if (livePrice > 0) {
           signal.price = livePrice;  // Override stale bar close with live price

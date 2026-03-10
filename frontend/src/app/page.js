@@ -171,6 +171,9 @@ export default function Dashboard() {
   const [mode, setMode] = useState("paper");
   const [showGuide, setShowGuide] = useState(false);
   const [config, setConfig] = useState(null);
+  const [activeTab, setActiveTab] = useState("main");
+  const [expStatus, setExpStatus] = useState(null);
+  const [expConnecting, setExpConnecting] = useState(false);
 
   // Clock
   useEffect(() => {
@@ -197,6 +200,20 @@ export default function Dashboard() {
     const id = setInterval(fetchStatus, 5000);
     return () => clearInterval(id);
   }, [fetchStatus]);
+
+  // Poll experiment status
+  const fetchExpStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/experiment/status`);
+      if (res.ok) setExpStatus(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchExpStatus();
+    const id = setInterval(fetchExpStatus, 5000);
+    return () => clearInterval(id);
+  }, [fetchExpStatus]);
 
   // Sync config from backend (read-only, set via env variables)
   useEffect(() => {
@@ -320,6 +337,19 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+
+      {/* TABS */}
+      <div className={styles.tabBar}>
+        <button className={activeTab === "main" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("main")}>
+          MAIN BOT
+        </button>
+        <button className={activeTab === "experiment" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("experiment")}>
+          EXPERIMENTS
+        </button>
+      </div>
+
+      {/* ═══ MAIN TAB ═══ */}
+      {activeTab === "main" && <>
 
       {/* STATS BAR */}
       <div className={styles.statsBar}>
@@ -903,6 +933,232 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      </>}
+
+      {/* ═══ EXPERIMENT TAB ═══ */}
+      {activeTab === "experiment" && (() => {
+        const es = expStatus;
+        const epv = es?.portfolioValue || 0;
+        const esv = es?.startValue || epv;
+        const etsv = es?.todayStartValue || epv;
+        const eTodayPnl = epv > 0 ? epv - etsv : 0;
+        const eTotalPnl = epv > 0 ? epv - esv : 0;
+        const eTodayPct = etsv > 0 ? (eTodayPnl / etsv) * 100 : 0;
+
+        return <>
+          {/* EXPERIMENT STATS BAR */}
+          <div className={styles.statsBar}>
+            {[
+              { label: "PORTFOLIO VALUE", val: fmt$(epv), sub: `${eTotalPnl >= 0 ? "+" : ""}${fmt$(eTotalPnl)} all time`, color: eTotalPnl >= 0 ? "var(--green)" : "var(--red)" },
+              { label: "TODAY P&L", val: `${eTodayPnl >= 0 ? "+" : ""}${fmt$(eTodayPnl)}`, sub: fmtPct(eTodayPct), color: eTodayPnl >= 0 ? "var(--green)" : "var(--red)" },
+              { label: "TOTAL TRADES", val: es?.totalTrades || 0, sub: `Win rate: ${es?.winRate != null ? es.winRate + "%" : "—"}`, color: "var(--blue)" },
+              { label: "OPEN POSITIONS", val: Object.keys(es?.positions || {}).length, sub: `Last scan: ${fmtTime(es?.lastScan)}`, color: "var(--yellow)" },
+            ].map((s) => (
+              <div className={styles.statBlock} key={s.label}>
+                <div className={styles.statLabel}>{s.label}</div>
+                <div className={styles.statVal} style={{ color: s.color }}>{s.val}</div>
+                <div className={styles.statSub}>{s.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* EXPERIMENT GRID */}
+          <div className={styles.grid}>
+            {/* LEFT: Signals */}
+            <div className={styles.panel}>
+              <div className={styles.panelTitle}>▲ HYBRID SIGNALS (Mean Reversion + Momentum)</div>
+              {(es?.signals || []).length === 0 ? (
+                <div className={styles.empty}>No signals yet — start experiment to scan</div>
+              ) : (
+                es.signals.map((s) => {
+                  const isBuy = s.signal === "buy";
+                  const isSell = s.signal === "sell";
+                  return (
+                    <div key={s.symbol} className={`${styles.signalCard} ${isBuy ? styles.hot : isSell ? styles.warm : styles.cold}`}>
+                      <div className={styles.signalHeader}>
+                        <span className={styles.ticker}>{s.symbol.replace("/USD", "")}</span>
+                        <span className={`${styles.scoreTag} ${isBuy ? styles.scoreHigh : isSell ? styles.scoreMed : styles.scoreLow}`}>
+                          {s.signal.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className={styles.metrics}>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>PRICE</span>
+                          <span className={styles.metricVal}>${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}</span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>24H AVG</span>
+                          <span className={styles.metricVal}>${s.avg24h < 1 ? s.avg24h?.toFixed(4) : s.avg24h?.toFixed(2)}</span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>DEVIATION</span>
+                          <span className={styles.metricVal} style={{ color: s.deviation < 0 ? "var(--green)" : s.deviation > 0 ? "var(--red)" : "var(--text)" }}>
+                            {s.deviation >= 0 ? "+" : ""}{s.deviation?.toFixed(2)}%
+                          </span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>TREND</span>
+                          <span className={styles.metricVal} style={{ color: s.trend === "rising" ? "var(--green)" : s.trend === "falling" ? "var(--red)" : "var(--dim)" }}>
+                            {s.trend === "rising" ? "Rising" : s.trend === "falling" ? `${s.consecutiveDips || 0} dips` : "Flat"}
+                          </span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>RSI</span>
+                          <span className={styles.metricVal} style={{ color: s.rsi < 35 ? "var(--green)" : s.rsi > 70 ? "var(--red)" : "var(--text)" }}>
+                            {s.rsi ?? "—"}
+                          </span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>ROC</span>
+                          <span className={styles.metricVal} style={{ color: s.minuteROC > 0 ? "var(--green)" : s.minuteROC < 0 ? "var(--red)" : "var(--dim)" }}>
+                            {s.minuteROC != null ? `${s.minuteROC > 0 ? "+" : ""}${s.minuteROC}%` : "—"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className={styles.deviationBar}>
+                        <div className={styles.deviationFill} style={{
+                          left: s.deviation < 0 ? `${50 + s.deviation * 5}%` : "50%",
+                          width: `${Math.min(Math.abs(s.deviation) * 5, 50)}%`,
+                          background: s.deviation < 0 ? "var(--green)" : "var(--red)",
+                        }} />
+                      </div>
+                      {s.reasons?.length > 0 && (
+                        <div className={styles.reasons}>{s.reasons.join(" · ")}</div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+
+              <div className={styles.panelTitle} style={{ marginTop: 8 }}>▲ OPEN POSITIONS</div>
+              {Object.keys(es?.positions || {}).length === 0 ? (
+                <div className={styles.empty}>No open positions</div>
+              ) : (
+                Object.values(es.positions).map((pos) => {
+                  const curPrice = pos.livePrice || pos.entryPrice;
+                  const pnlPct = pos.entryPrice ? ((curPrice - pos.entryPrice) / pos.entryPrice) * 100 : 0;
+                  const pnlVal = (pnlPct / 100) * pos.notional;
+                  return (
+                    <div key={pos.symbol} className={styles.posCard}>
+                      <div className={styles.posHeader}>
+                        <span className={styles.ticker}>{pos.symbol?.replace("/USD", "")}</span>
+                        <span className={styles.posEntry} style={{ color: pnlPct >= 0 ? "var(--green)" : "var(--red)" }}>
+                          {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}% ({pnlVal >= 0 ? "+" : ""}{fmt$(pnlVal)})
+                        </span>
+                      </div>
+                      <div className={styles.posDetails}>
+                        Entry {fmt$(pos.entryPrice)} · Now {fmt$(curPrice)}
+                      </div>
+                      <div className={styles.posDetails}>
+                        24h Avg {fmt$(pos.avg24h)} · Dev {pos.deviation?.toFixed(2)}% · {pos.trend === "rising" ? "Rising" : pos.trend === "falling" ? `Falling (${pos.consecutiveDips || 0} dips)` : "Flat"} · RSI {pos.rsi ?? "—"}
+                      </div>
+                      <div className={styles.posDetails} style={{ marginTop: 2, color: "var(--dim)" }}>
+                        {pos.entryTime ? new Date(pos.entryTime).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "—"} · ${pos.notional?.toFixed(2)} invested
+                      </div>
+                      <button className={styles.btnSell} onClick={async () => {
+                        if (!confirm(`Sell ${pos.symbol?.replace("/USD", "")} now?`)) return;
+                        try {
+                          await fetch(`${API}/api/experiment/trade`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ symbol: pos.symbol, side: "sell" }),
+                          });
+                          fetchExpStatus();
+                        } catch {}
+                      }}>SELL</button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* CENTER: Chart + Trade log */}
+            <div className={styles.center}>
+              <div className={styles.chartArea}>
+                <div className={styles.chartLabel}>EXPERIMENT EQUITY CURVE</div>
+                <EquityChart data={es?.equityHistory || [{ t: Date.now(), v: 100 }]} startValue={esv} />
+              </div>
+
+              <div className={styles.tradeLog}>
+                <div className={`${styles.logRow} ${styles.logHeader}`}>
+                  <span>TIME</span><span>PAIR</span><span>SIDE</span><span>QTY</span><span>PRICE</span><span>P&L</span>
+                </div>
+                {(es?.trades || []).length === 0 ? (
+                  <div className={styles.empty}>No trades yet</div>
+                ) : (
+                  es.trades.slice(0, 20).map((t, i) => (
+                    <div key={i} className={styles.logRow}>
+                      <span>{fmtTime(t.time)}</span>
+                      <span>{t.symbol?.replace("/USD", "")}</span>
+                      <span><span className={`${styles.tag} ${t.side === "BUY" ? styles.tagBuy : styles.tagSell}`}>{t.side}</span></span>
+                      <span>{t.qty?.toFixed(4)}</span>
+                      <span>{fmt$(t.price)}</span>
+                      <span style={{ color: t.pnl == null ? "inherit" : t.pnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                        {t.pnl == null ? "—" : `${t.pnl >= 0 ? "+" : ""}$${t.pnl.toFixed(2)}`}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* RIGHT: Config + Controls */}
+            <div className={`${styles.panel} ${styles.rightPanel}`}>
+              <div className={styles.panelTitle}>▲ EXPERIMENT CONFIG</div>
+              <div className={styles.configSection}>
+                <div className={styles.configLabel}>MEAN REVERSION</div>
+                {[
+                  { label: "Strategy", value: "Mean Reversion" },
+                  { label: "Dip Threshold", value: `${((es?.config?.dipThreshold || 0.015) * 100).toFixed(1)}%` },
+                  { label: "Position Size", value: `${Math.round((es?.config?.positionSize || 0.33) * 100)}%` },
+                  { label: "Max Positions", value: es?.config?.maxPositions || 2 },
+                  { label: "Scan Interval", value: `${es?.config?.scanInterval || 30}s` },
+                  { label: "Max Hold Time", value: `${es?.config?.maxHoldHours || 4}h` },
+                ].map((s) => (
+                  <div key={s.label} className={styles.configRow}>
+                    <span className={styles.configRowLabel}>{s.label}</span>
+                    <span className={styles.configRowVal}>{s.value}</span>
+                  </div>
+                ))}
+                <div className={styles.hint} style={{ marginTop: 12 }}>
+                  Set via EXPERIMENT_* environment variables.
+                </div>
+              </div>
+
+              <div className={styles.configSection}>
+                {!es?.running ? (
+                  <button className={styles.btnStart} onClick={async () => {
+                    setExpConnecting(true);
+                    try {
+                      await fetch(`${API}/api/experiment/start`, { method: "POST" });
+                      await fetchExpStatus();
+                    } finally { setExpConnecting(false); }
+                  }} disabled={expConnecting}>
+                    {expConnecting ? "CONNECTING..." : "▶ START EXPERIMENT"}
+                  </button>
+                ) : (
+                  <button className={styles.btnStop} onClick={async () => {
+                    await fetch(`${API}/api/experiment/stop`, { method: "POST" });
+                    await fetchExpStatus();
+                  }}>■ STOP EXPERIMENT</button>
+                )}
+              </div>
+
+              <div className={styles.panelTitle}>▲ EVENT LOG</div>
+              <div className={styles.eventLog}>
+                {(es?.events || []).map((e, i) => (
+                  <div key={i} className={`${styles.event} ${styles["event_" + e.type]}`}>
+                    <span className={styles.eventTime}>{fmtTime(e.time)}</span>
+                    <span>{e.message}</span>
+                  </div>
+                ))}
+                {!es?.events?.length && <div className={styles.empty}>Waiting for events...</div>}
+              </div>
+            </div>
+          </div>
+        </>;
+      })()}
 
       {/* DISCLAIMER */}
       <div className={styles.disclaimer}>

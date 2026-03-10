@@ -98,11 +98,12 @@ async function getCryptoBars(
   symbol,
   timeframe = "1Min",
   limit = 30,
+  lookbackMs = 2 * 60 * 60 * 1000,
 ) {
   const sym = symbol.includes("/") ? symbol : symbol.replace(/USD$/, "/USD");
   try {
-    // Force recent data by setting start to 2 hours ago (avoids stale bar cache)
-    const start = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    // Force recent data by setting start param (avoids stale bar cache)
+    const start = new Date(Date.now() - lookbackMs).toISOString();
     const res = await axios.get(
       `https://data.alpaca.markets/v1beta3/crypto/us/bars`,
       {
@@ -126,8 +127,19 @@ async function getCryptoBars(
   }
 }
 
-// Get latest price from Alpaca
-async function getLatestCryptoPrice(apiKey, secretKey, symbol) {
+// Get latest price — checks WebSocket stream cache first, falls back to REST
+const cryptoStream = require('./crypto-stream');
+
+async function getLatestCryptoPrice(apiKey, secretKey, symbol, streamHandle) {
+  // Try stream cache first (< 60s old = fresh enough)
+  if (streamHandle) {
+    const cached = cryptoStream.getPrice(streamHandle, symbol);
+    if (cached && cached.age < 60000) {
+      return cached.price;
+    }
+  }
+
+  // Fallback to REST
   const sym = symbol.includes("/") ? symbol : symbol.replace(/USD$/, "/USD");
   try {
     const res = await axios.get(

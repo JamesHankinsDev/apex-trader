@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bot = require('./bot');
+const experimentBot = require('./experiment-bot');
 
 const app = express();
 app.use(express.json());
@@ -60,12 +61,43 @@ app.post('/api/trade', async (req, res) => {
     // Fetch current market price instead of using stale entry price
     const alpaca = require('./alpaca');
     const currentPrice = await alpaca.getLatestCryptoPrice(
-      bot.config.apiKey, bot.config.secretKey, symbol
+      bot.config.apiKey, bot.config.secretKey, symbol, bot.streamHandle
     );
     if (!currentPrice) return res.status(500).json({ ok: false, msg: 'Could not fetch current price for ' + symbol });
     await bot.executeExit(symbol, currentPrice, 'MANUAL CLOSE');
   }
 
+  res.json({ ok: true });
+});
+
+// ─── EXPERIMENT BOT ──────────────────────────────────────────
+app.get('/api/experiment/status', (req, res) => {
+  res.json(experimentBot.getStatus());
+});
+
+app.post('/api/experiment/start', async (req, res) => {
+  const result = await experimentBot.start();
+  res.json(result);
+});
+
+app.post('/api/experiment/stop', (req, res) => {
+  res.json(experimentBot.stop());
+});
+
+app.post('/api/experiment/trade', async (req, res) => {
+  const { symbol, side } = req.body;
+  if (!symbol || !side) return res.status(400).json({ ok: false, msg: 'symbol and side required' });
+
+  if (side === 'sell') {
+    const pos = experimentBot.state?.positions?.[symbol];
+    if (!pos) return res.status(400).json({ ok: false, msg: 'No open position for ' + symbol });
+    const alpacaApi = require('./alpaca');
+    const currentPrice = await alpacaApi.getLatestCryptoPrice(
+      experimentBot.config.apiKey, experimentBot.config.secretKey, symbol, experimentBot.streamHandle
+    );
+    if (!currentPrice) return res.status(500).json({ ok: false, msg: 'Could not fetch current price' });
+    await experimentBot.executeExit(symbol, currentPrice, 'MANUAL CLOSE');
+  }
   res.json({ ok: true });
 });
 
@@ -81,5 +113,11 @@ app.listen(PORT, () => {
   if (process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
     console.log('📡 Auto-starting bot from environment credentials...');
     bot.start().then(r => console.log('   Bot start:', r.msg));
+  }
+
+  // Auto-start experiment bot if credentials are set
+  if (process.env.EXPERIMENT_ALPACA_API_KEY && process.env.EXPERIMENT_ALPACA_SECRET_KEY) {
+    console.log('🧪 Auto-starting experiment bot...');
+    experimentBot.start().then(r => console.log('   Experiment start:', r.msg));
   }
 });
