@@ -1,14 +1,15 @@
-// src/experiment-bot.js - Mean Reversion + Momentum Hybrid Experiment Bot
-// Contrarian entry (buy dips) with momentum-aware exit (ride strength, bail on exhaustion)
+// src/experiment2-bot.js - 20-Bar Momentum Breakout Experiment Bot
+// Trend-following: buy breakouts above 20-bar high, trail stops on the way up
 const fs = require('fs');
 const path = require('path');
 const alpaca = require('./alpaca');
-const { evaluate } = require('./mean-reversion-strategy');
+const { evaluate } = require('./breakout-strategy');
 const cryptoStream = require('./crypto-stream');
 
-const STATE_FILE = path.join(__dirname, '..', '.experiment-state.json');
+const STATE_FILE = path.join(__dirname, '..', '.experiment2-state.json');
 const SPREAD_COST_PCT = 0.0015;
-const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+const EIGHTY_BARS_4H_MS = 80 * FOUR_HOURS_MS; // ~13 days for 50+ bars of 4h data
 
 function loadState() {
   try {
@@ -24,6 +25,7 @@ function saveState(state) {
       wins: state.wins,
       losses: state.losses,
       positions: state.positions,
+      cooldowns: state.cooldowns,
     }, null, 2));
   } catch {}
 }
@@ -41,19 +43,23 @@ async function getFillPrice(apiKey, secretKey, mode, orderId, fallbackPrice) {
   return fallbackPrice;
 }
 
-class ExperimentBot {
+class Experiment2Bot {
   constructor() {
     this.running = false;
     this.config = {
-      apiKey: process.env.EXPERIMENT_1_ALPACA_API_KEY || '',
-      secretKey: process.env.EXPERIMENT_1_ALPACA_SECRET_KEY || '',
-      mode: 'paper', // Always paper for experiments
-      watchlist: (process.env.EXPERIMENT_1_WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD').split(','),
-      positionSize: parseFloat(process.env.EXPERIMENT_1_POSITION_SIZE) || 0.33,
-      dipThreshold: parseFloat(process.env.EXPERIMENT_1_DIP_THRESHOLD) || 0.015,
-      maxPositions: parseInt(process.env.EXPERIMENT_1_MAX_POSITIONS) || 2,
-      scanInterval: parseInt(process.env.EXPERIMENT_1_SCAN_INTERVAL_SECONDS) || 30,
-      maxHoldHours: parseInt(process.env.EXPERIMENT_1_MAX_HOLD_HOURS) || 4,
+      apiKey: process.env.EXPERIMENT_2_ALPACA_API_KEY || '',
+      secretKey: process.env.EXPERIMENT_2_ALPACA_SECRET_KEY || '',
+      mode: 'paper',
+      watchlist: (process.env.EXPERIMENT_2_WATCHLIST || 'AVAX/USD,LINK/USD,AAVE/USD,DOT/USD,UNI/USD').split(','),
+      positionSize: 0.95,        // 95% of available balance
+      maxPositions: 1,           // Only one position at a time
+      trailingStopPct: 0.15,     // 15% trailing stop
+      hardStopPct: 0.20,         // 20% hard stop loss
+      takeProfitMultiple: 3,     // 3x initial stop distance
+      maxHoldHours: 72,          // 72-hour time exit
+      scanInterval: parseInt(process.env.EXPERIMENT_2_SCAN_INTERVAL_SECONDS) || 30,
+      minBalance: 15,            // Pause if balance < $15
+      cooldownCandles: 2,        // Skip 2 candles after stop-loss on same coin
     };
 
     const saved = loadState();
@@ -61,6 +67,7 @@ class ExperimentBot {
       portfolioValue: 0,
       cashBalance: 0,
       positions: saved.positions || {},
+      cooldowns: saved.cooldowns || {},  // symbol -> { until: ISO timestamp }
       signals: [],
       trades: [],
       equityHistory: [],
@@ -80,7 +87,7 @@ class ExperimentBot {
   // ─── LIFECYCLE ──────────────────────────────────────────────
 
   async start() {
-    if (this.running) return { ok: false, msg: 'Experiment already running' };
+    if (this.running) return { ok: false, msg: 'Experiment 2 already running' };
     if (!this.config.apiKey || !this.config.secretKey) {
       return { ok: false, msg: 'Missing experiment API credentials' };
     }
@@ -112,7 +119,6 @@ class ExperimentBot {
         this.state.todayStartValue = this.state.portfolioValue;
       }
 
-      // Load trade history from Alpaca
       await this.syncTradeHistory();
       await this.syncPositions();
 
@@ -127,13 +133,13 @@ class ExperimentBot {
       );
 
       this.running = true;
-      this.addEvent('success', 'Experiment started (Mean Reversion + Momentum Hybrid)');
-      this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)} | Dip threshold: ${(this.config.dipThreshold * 100).toFixed(1)}%`);
+      this.addEvent('success', 'Experiment 2 started (Momentum Breakout)');
+      this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)} | Trail: ${(this.config.trailingStopPct * 100)}% | Hard SL: ${(this.config.hardStopPct * 100)}%`);
 
       this.runScan();
       this.scanTimer = setInterval(() => this.runScan(), this.config.scanInterval * 1000);
 
-      return { ok: true, msg: 'Experiment started' };
+      return { ok: true, msg: 'Experiment 2 started' };
     } catch (err) {
       return { ok: false, msg: `Connection failed: ${err.message}` };
     }
@@ -143,8 +149,8 @@ class ExperimentBot {
     this.running = false;
     if (this.scanTimer) { clearInterval(this.scanTimer); this.scanTimer = null; }
     if (this.streamHandle) { cryptoStream.disconnect(this.streamHandle); this.streamHandle = null; }
-    this.addEvent('warning', 'Experiment stopped');
-    return { ok: true, msg: 'Experiment stopped' };
+    this.addEvent('warning', 'Experiment 2 stopped');
+    return { ok: true, msg: 'Experiment 2 stopped' };
   }
 
   // ─── POSITION SYNC ──────────────────────────────────────────
@@ -167,6 +173,10 @@ class ExperimentBot {
             notional: entryPrice * qty,
             entryCost: entryPrice * qty * SPREAD_COST_PCT,
             entryTime: new Date().toISOString(),
+            highWaterMark: entryPrice,
+            trailingStop: entryPrice * (1 - this.config.trailingStopPct),
+            hardStop: entryPrice * (1 - this.config.hardStopPct),
+            takeProfit: entryPrice * (1 + this.config.trailingStopPct * this.config.takeProfitMultiple),
             orderId: null,
           };
           this.addEvent('info', `Synced position: ${symbol} @ $${entryPrice.toFixed(4)}`);
@@ -238,49 +248,62 @@ class ExperimentBot {
   async runScan() {
     if (!this.running) return;
     this.state.lastScan = new Date().toISOString();
+
+    // Capital protection: pause if balance too low
+    if (this.state.cashBalance < this.config.minBalance && Object.keys(this.state.positions).length === 0) {
+      this.addEvent('warning', `Balance $${this.state.cashBalance.toFixed(2)} < $${this.config.minBalance} — paused`);
+      return;
+    }
+
     const signals = [];
 
     for (const symbol of this.config.watchlist) {
       try {
-        // Fetch 24h of 1-hour bars for average calculation
-        const hourlyBars = await alpaca.getCryptoBars(
+        // Fetch 4-hour bars (need 50+ for SMA50, fetch 60 to be safe)
+        const bars = await alpaca.getCryptoBars(
           this.config.apiKey, this.config.secretKey, symbol,
-          '1Hour', 24, TWENTY_FOUR_HOURS_MS
+          '4Hour', 60, EIGHTY_BARS_4H_MS
         );
 
-        // Fetch recent 1-min bars for momentum/trend detection
-        const minuteBars = await alpaca.getCryptoBars(
-          this.config.apiKey, this.config.secretKey, symbol,
-          '1Min', 10
-        );
-
-        // Get live price — stream first, REST fallback
+        // Get live price
         const livePrice = await alpaca.getLatestCryptoPrice(
           this.config.apiKey, this.config.secretKey, symbol, this.streamHandle
         );
         if (!livePrice || livePrice <= 0) continue;
 
-        const signal = evaluate(symbol, hourlyBars, livePrice, minuteBars, this.config.dipThreshold);
+        const signal = evaluate(symbol, bars, livePrice);
         signals.push(signal);
 
+        // Check exits for open positions
         const pos = this.state.positions[symbol];
         if (pos) {
           pos.livePrice = livePrice;
-          pos.avg24h = signal.avg24h;
-          pos.deviation = signal.deviation;
-          pos.trend = signal.trend;
-          pos.consecutiveDips = signal.consecutiveDips;
-          pos.rsi = signal.rsi;
-          pos.minuteROC = signal.minuteROC;
-          pos.volumeFading = signal.volumeFading;
 
-          // Exit: momentum exhaustion (multi-signal confirmation)
-          if (signal.signal === 'sell') {
-            await this.executeExit(symbol, livePrice, `MOMENTUM EXIT (+${signal.deviation.toFixed(2)}%, ${signal.consecutiveDips} dips, RSI ${signal.rsi})`);
+          // Update high water mark and trailing stop
+          if (livePrice > (pos.highWaterMark || pos.entryPrice)) {
+            pos.highWaterMark = livePrice;
+            pos.trailingStop = livePrice * (1 - this.config.trailingStopPct);
+          }
+
+          // Take profit
+          if (livePrice >= pos.takeProfit) {
+            await this.executeExit(symbol, livePrice, `TAKE PROFIT ($${livePrice.toFixed(2)} >= $${pos.takeProfit.toFixed(2)})`);
             continue;
           }
 
-          // Time exit
+          // Trailing stop
+          if (livePrice <= pos.trailingStop) {
+            await this.executeExit(symbol, livePrice, `TRAILING STOP ($${livePrice.toFixed(2)} <= $${pos.trailingStop.toFixed(2)})`, true);
+            continue;
+          }
+
+          // Hard stop loss
+          if (livePrice <= pos.hardStop) {
+            await this.executeExit(symbol, livePrice, `HARD STOP ($${livePrice.toFixed(2)} <= $${pos.hardStop.toFixed(2)})`, true);
+            continue;
+          }
+
+          // Time exit (72 hours)
           const holdHours = (Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60);
           if (holdHours >= this.config.maxHoldHours) {
             await this.executeExit(symbol, livePrice, `TIME EXIT (${Math.round(holdHours)}h)`);
@@ -294,15 +317,23 @@ class ExperimentBot {
 
     this.state.signals = signals;
 
-    // Entry: buy dips
-    let openCount = Object.keys(this.state.positions).length;
-    for (const sig of signals) {
-      if (openCount >= this.config.maxPositions) break;
-      if (sig.signal !== 'buy') continue;
-      if (this.state.positions[sig.symbol]) continue;
+    // Entry: only 1 position at a time
+    const openCount = Object.keys(this.state.positions).length;
+    if (openCount < this.config.maxPositions) {
+      for (const sig of signals) {
+        if (sig.signal !== 'buy') continue;
+        if (this.state.positions[sig.symbol]) continue;
 
-      await this.executeEntry(sig);
-      openCount++;
+        // Check cooldown
+        const cd = this.state.cooldowns[sig.symbol];
+        if (cd && new Date(cd.until) > new Date()) {
+          this.addEvent('info', `Skipping ${sig.symbol} — cooldown until ${new Date(cd.until).toLocaleTimeString()}`);
+          continue;
+        }
+
+        await this.executeEntry(sig);
+        break; // Only one entry per scan
+      }
     }
 
     // Refresh account
@@ -326,8 +357,10 @@ class ExperimentBot {
 
   async executeEntry(signal) {
     const { symbol, price } = signal;
-    const targetNotional = this.state.portfolioValue * this.config.positionSize;
-    const notional = Math.min(targetNotional, this.state.cashBalance);
+    const notional = Math.min(
+      this.state.portfolioValue * this.config.positionSize,
+      this.state.cashBalance
+    );
     if (notional < 1) return;
 
     try {
@@ -341,16 +374,27 @@ class ExperimentBot {
       );
       const entryCost = notional * SPREAD_COST_PCT;
       const qty = (notional - entryCost) / fillPrice;
+      const trailingStop = fillPrice * (1 - this.config.trailingStopPct);
+      const hardStop = fillPrice * (1 - this.config.hardStopPct);
+      const takeProfit = fillPrice * (1 + this.config.trailingStopPct * this.config.takeProfitMultiple);
 
       this.state.positions[symbol] = {
         symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
         entryTime: new Date().toISOString(),
-        avg24h: signal.avg24h,
-        deviation: signal.deviation,
+        highWaterMark: fillPrice,
+        trailingStop,
+        hardStop,
+        takeProfit,
+        entrySignal: {
+          breakoutHigh: signal.breakoutHigh,
+          volumeRatio: signal.volumeRatio,
+          sma50: signal.sma50,
+          rsi: signal.rsi,
+        },
       };
 
       this.addEvent('success',
-        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.deviation.toFixed(2)}% below avg | RSI ${signal.rsi} | ${signal.reasons.join(' · ')}`
+        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.reasons.join(' · ')} | SL $${hardStop.toFixed(2)} | TP $${takeProfit.toFixed(2)}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {
@@ -360,7 +404,7 @@ class ExperimentBot {
 
   // ─── EXIT ───────────────────────────────────────────────────
 
-  async executeExit(symbol, price, reason) {
+  async executeExit(symbol, price, reason, isStopLoss = false) {
     const pos = this.state.positions[symbol];
     if (!pos) return;
 
@@ -385,6 +429,13 @@ class ExperimentBot {
         time: new Date().toISOString(), pnl: parseFloat(pnl.toFixed(4)), reason,
       });
 
+      // Cooldown after stop-loss: skip 2 candles (2 x 4h = 8 hours)
+      if (isStopLoss) {
+        const cooldownMs = this.config.cooldownCandles * FOUR_HOURS_MS;
+        this.state.cooldowns[symbol] = { until: new Date(Date.now() + cooldownMs).toISOString() };
+        this.addEvent('info', `Cooldown: ${symbol} paused for ${this.config.cooldownCandles} candles (${this.config.cooldownCandles * 4}h)`);
+      }
+
       delete this.state.positions[symbol];
       saveState(this.state);
     } catch (err) {
@@ -397,7 +448,7 @@ class ExperimentBot {
   addEvent(type, message) {
     this.state.events.unshift({ type, message, time: new Date().toISOString() });
     if (this.state.events.length > 50) this.state.events.pop();
-    console.log(`[EXPERIMENT][${type.toUpperCase()}] ${message}`);
+    console.log(`[EXP2][${type.toUpperCase()}] ${message}`);
   }
 
   recordTrade(trade) {
@@ -411,13 +462,17 @@ class ExperimentBot {
     return {
       running: this.running,
       mode: this.config.mode,
-      strategy: 'mean-reversion-momentum',
+      strategy: 'momentum-breakout',
       config: {
         positionSize: this.config.positionSize,
-        dipThreshold: this.config.dipThreshold,
         maxPositions: this.config.maxPositions,
-        scanInterval: this.config.scanInterval,
+        trailingStopPct: this.config.trailingStopPct,
+        hardStopPct: this.config.hardStopPct,
+        takeProfitMultiple: this.config.takeProfitMultiple,
         maxHoldHours: this.config.maxHoldHours,
+        scanInterval: this.config.scanInterval,
+        minBalance: this.config.minBalance,
+        cooldownCandles: this.config.cooldownCandles,
         watchlist: this.config.watchlist,
       },
       portfolioValue: this.state.portfolioValue,
@@ -435,8 +490,9 @@ class ExperimentBot {
       lastScan: this.state.lastScan,
       startedAt: this.state.startedAt,
       events: this.state.events,
+      cooldowns: this.state.cooldowns,
     };
   }
 }
 
-module.exports = new ExperimentBot();
+module.exports = new Experiment2Bot();

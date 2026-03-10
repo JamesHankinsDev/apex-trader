@@ -2,5 +2,23 @@
   "startValue": 25,
   "wins": 0,
   "losses": 0,
-  "positions": {}
+  "positions": {
+    "DOT/USD": {
+      "symbol": "DOT/USD",
+      "orderId": "33588351-16c7-4a40-819f-219fee3c3f80",
+      "entryPrice": 1.5054,
+      "qty": 15.432626538,
+      "notional": 23.75,
+      "entryCost": 0.035625000000000004,
+      "entryTime": "2026-03-10T20:42:50.610Z",
+      "avg24h": 1.514837,
+      "deviation": -1.42,
+      "livePrice": 1.4934,
+      "trend": "rising",
+      "consecutiveDips": 0,
+      "rsi": 47.04,
+      "minuteROC": 0.047,
+      "volumeFading": false
+    }
+  }
 }

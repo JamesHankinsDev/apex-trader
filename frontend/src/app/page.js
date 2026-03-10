@@ -174,6 +174,8 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("main");
   const [expStatus, setExpStatus] = useState(null);
   const [expConnecting, setExpConnecting] = useState(false);
+  const [exp2Status, setExp2Status] = useState(null);
+  const [exp2Connecting, setExp2Connecting] = useState(false);
 
   // Clock
   useEffect(() => {
@@ -214,6 +216,20 @@ export default function Dashboard() {
     const id = setInterval(fetchExpStatus, 5000);
     return () => clearInterval(id);
   }, [fetchExpStatus]);
+
+  // Poll experiment 2 status
+  const fetchExp2Status = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/bot2/status`);
+      if (res.ok) setExp2Status(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchExp2Status();
+    const id = setInterval(fetchExp2Status, 5000);
+    return () => clearInterval(id);
+  }, [fetchExp2Status]);
 
   // Sync config from backend (read-only, set via env variables)
   useEffect(() => {
@@ -344,7 +360,10 @@ export default function Dashboard() {
           MAIN BOT
         </button>
         <button className={activeTab === "experiment" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("experiment")}>
-          EXPERIMENTS
+          EXPERIMENT 1
+        </button>
+        <button className={activeTab === "experiment2" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("experiment2")}>
+          EXPERIMENT 2
         </button>
       </div>
 
@@ -1154,6 +1173,222 @@ export default function Dashboard() {
                   </div>
                 ))}
                 {!es?.events?.length && <div className={styles.empty}>Waiting for events...</div>}
+              </div>
+            </div>
+          </div>
+        </>;
+      })()}
+
+      {/* ═══ EXPERIMENT 2 TAB ═══ */}
+      {activeTab === "experiment2" && (() => {
+        const e2 = exp2Status;
+        const e2pv = e2?.portfolioValue || 0;
+        const e2sv = e2?.startValue || e2pv;
+        const e2tsv = e2?.todayStartValue || e2pv;
+        const e2TodayPnl = e2pv > 0 ? e2pv - e2tsv : 0;
+        const e2TotalPnl = e2pv > 0 ? e2pv - e2sv : 0;
+        const e2TodayPct = e2tsv > 0 ? (e2TodayPnl / e2tsv) * 100 : 0;
+
+        return <>
+          <div className={styles.statsBar}>
+            {[
+              { label: "PORTFOLIO VALUE", val: fmt$(e2pv), sub: `${e2TotalPnl >= 0 ? "+" : ""}${fmt$(e2TotalPnl)} all time`, color: e2TotalPnl >= 0 ? "var(--green)" : "var(--red)" },
+              { label: "TODAY P&L", val: `${e2TodayPnl >= 0 ? "+" : ""}${fmt$(e2TodayPnl)}`, sub: fmtPct(e2TodayPct), color: e2TodayPnl >= 0 ? "var(--green)" : "var(--red)" },
+              { label: "TOTAL TRADES", val: e2?.totalTrades || 0, sub: `Win rate: ${e2?.winRate != null ? e2.winRate + "%" : "—"}`, color: "var(--blue)" },
+              { label: "OPEN POSITIONS", val: Object.keys(e2?.positions || {}).length, sub: `Last scan: ${fmtTime(e2?.lastScan)}`, color: "var(--yellow)" },
+            ].map((s) => (
+              <div className={styles.statBlock} key={s.label}>
+                <div className={styles.statLabel}>{s.label}</div>
+                <div className={styles.statVal} style={{ color: s.color }}>{s.val}</div>
+                <div className={styles.statSub}>{s.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className={styles.grid}>
+            {/* LEFT: Signals */}
+            <div className={styles.panel}>
+              <div className={styles.panelTitle}>▲ BREAKOUT SIGNALS (20-Bar Momentum)</div>
+              {(e2?.signals || []).length === 0 ? (
+                <div className={styles.empty}>No signals yet — start experiment 2 to scan</div>
+              ) : (
+                e2.signals.map((s) => {
+                  const isBuy = s.signal === "buy";
+                  const allMet = s.conditions?.breakout && s.conditions?.volume && s.conditions?.trend && s.conditions?.rsi;
+                  return (
+                    <div key={s.symbol} className={`${styles.signalCard} ${isBuy ? styles.hot : styles.cold}`}>
+                      <div className={styles.signalHeader}>
+                        <span className={styles.ticker}>{s.symbol.replace("/USD", "")}</span>
+                        <span className={`${styles.scoreTag} ${isBuy ? styles.scoreHigh : styles.scoreLow}`}>
+                          {isBuy ? "BREAKOUT" : "WAITING"}
+                        </span>
+                      </div>
+                      <div className={styles.metrics}>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>PRICE</span>
+                          <span className={styles.metricVal}>${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}</span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>20-BAR HIGH</span>
+                          <span className={styles.metricVal} style={{ color: s.conditions?.breakout ? "var(--green)" : "var(--dim)" }}>
+                            ${s.breakoutHigh < 1 ? s.breakoutHigh?.toFixed(4) : s.breakoutHigh?.toFixed(2)}
+                            {s.conditions?.breakout ? " ✓" : ""}
+                          </span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>VOLUME</span>
+                          <span className={styles.metricVal} style={{ color: s.conditions?.volume ? "var(--green)" : "var(--dim)" }}>
+                            {s.volumeRatio?.toFixed(1)}x{s.conditions?.volume ? " ✓" : ""}
+                          </span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>TREND</span>
+                          <span className={styles.metricVal} style={{ color: s.conditions?.trend ? "var(--green)" : "var(--dim)" }}>
+                            {s.conditions?.trend ? "Above SMA50 ✓" : "Below SMA50"}
+                          </span>
+                        </div>
+                        <div className={styles.metric}>
+                          <span className={styles.metricLabel}>RSI</span>
+                          <span className={styles.metricVal} style={{ color: s.conditions?.rsi ? "var(--green)" : s.rsi > 72 ? "var(--red)" : "var(--dim)" }}>
+                            {s.rsi ?? "—"}{s.conditions?.rsi ? " ✓" : ""}
+                          </span>
+                        </div>
+                      </div>
+                      {s.reasons?.length > 0 && (
+                        <div className={styles.reasons}>{s.reasons.join(" · ")}</div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+
+              <div className={styles.panelTitle} style={{ marginTop: 8 }}>▲ OPEN POSITIONS</div>
+              {Object.keys(e2?.positions || {}).length === 0 ? (
+                <div className={styles.empty}>No open positions</div>
+              ) : (
+                Object.values(e2.positions).map((pos) => {
+                  const curPrice = pos.livePrice || pos.entryPrice;
+                  const pnlPct = pos.entryPrice ? ((curPrice - pos.entryPrice) / pos.entryPrice) * 100 : 0;
+                  const pnlVal = (pnlPct / 100) * pos.notional;
+                  return (
+                    <div key={pos.symbol} className={styles.posCard}>
+                      <div className={styles.posHeader}>
+                        <span className={styles.ticker}>{pos.symbol?.replace("/USD", "")}</span>
+                        <span className={styles.posEntry} style={{ color: pnlPct >= 0 ? "var(--green)" : "var(--red)" }}>
+                          {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}% ({pnlVal >= 0 ? "+" : ""}{fmt$(pnlVal)})
+                        </span>
+                      </div>
+                      <div className={styles.posDetails}>
+                        Entry {fmt$(pos.entryPrice)} · Now {fmt$(curPrice)} · High {fmt$(pos.highWaterMark)}
+                      </div>
+                      <div className={styles.posDetails}>
+                        Trail SL {fmt$(pos.trailingStop)} · Hard SL {fmt$(pos.hardStop)} · TP {fmt$(pos.takeProfit)}
+                      </div>
+                      <div className={styles.posDetails} style={{ marginTop: 2, color: "var(--dim)" }}>
+                        {pos.entryTime ? new Date(pos.entryTime).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "—"} · ${pos.notional?.toFixed(2)} invested
+                      </div>
+                      <button className={styles.btnSell} onClick={async () => {
+                        if (!confirm(`Sell ${pos.symbol?.replace("/USD", "")} now?`)) return;
+                        try {
+                          await fetch(`${API}/api/bot2/trade`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ symbol: pos.symbol, side: "sell" }),
+                          });
+                          fetchExp2Status();
+                        } catch {}
+                      }}>SELL</button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* CENTER: Chart + Trade log */}
+            <div className={styles.center}>
+              <div className={styles.chartArea}>
+                <div className={styles.chartLabel}>EXPERIMENT 2 EQUITY CURVE</div>
+                <EquityChart data={e2?.equityHistory || [{ t: Date.now(), v: 100 }]} startValue={e2sv} />
+              </div>
+
+              <div className={styles.tradeLog}>
+                <div className={`${styles.logRow} ${styles.logHeader}`}>
+                  <span>TIME</span><span>PAIR</span><span>SIDE</span><span>QTY</span><span>PRICE</span><span>P&L</span>
+                </div>
+                {(e2?.trades || []).length === 0 ? (
+                  <div className={styles.empty}>No trades yet</div>
+                ) : (
+                  e2.trades.slice(0, 20).map((t, i) => (
+                    <div key={i} className={styles.logRow}>
+                      <span>{fmtTime(t.time)}</span>
+                      <span>{t.symbol?.replace("/USD", "")}</span>
+                      <span><span className={`${styles.tag} ${t.side === "BUY" ? styles.tagBuy : styles.tagSell}`}>{t.side}</span></span>
+                      <span>{t.qty?.toFixed(4)}</span>
+                      <span>{fmt$(t.price)}</span>
+                      <span style={{ color: t.pnl == null ? "inherit" : t.pnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                        {t.pnl == null ? "—" : `${t.pnl >= 0 ? "+" : ""}$${t.pnl.toFixed(2)}`}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* RIGHT: Config + Controls */}
+            <div className={`${styles.panel} ${styles.rightPanel}`}>
+              <div className={styles.panelTitle}>▲ BREAKOUT CONFIG</div>
+              <div className={styles.configSection}>
+                <div className={styles.configLabel}>MOMENTUM BREAKOUT</div>
+                {[
+                  { label: "Strategy", value: "20-Bar Breakout" },
+                  { label: "Position Size", value: `${Math.round((e2?.config?.positionSize || 0.95) * 100)}%` },
+                  { label: "Max Positions", value: e2?.config?.maxPositions || 1 },
+                  { label: "Trailing Stop", value: `${(e2?.config?.trailingStopPct || 0.15) * 100}%` },
+                  { label: "Hard Stop", value: `${(e2?.config?.hardStopPct || 0.20) * 100}%` },
+                  { label: "Take Profit", value: `${(e2?.config?.takeProfitMultiple || 3)}x stop` },
+                  { label: "Max Hold Time", value: `${e2?.config?.maxHoldHours || 72}h` },
+                  { label: "Min Balance", value: `$${e2?.config?.minBalance || 15}` },
+                  { label: "Cooldown", value: `${e2?.config?.cooldownCandles || 2} candles` },
+                  { label: "Scan Interval", value: `${e2?.config?.scanInterval || 30}s` },
+                ].map((s) => (
+                  <div key={s.label} className={styles.configRow}>
+                    <span className={styles.configRowLabel}>{s.label}</span>
+                    <span className={styles.configRowVal}>{s.value}</span>
+                  </div>
+                ))}
+                <div className={styles.hint} style={{ marginTop: 12 }}>
+                  Uses EXPERIMENT_* API credentials. Separate internal state.
+                </div>
+              </div>
+
+              <div className={styles.configSection}>
+                {!e2?.running ? (
+                  <button className={styles.btnStart} onClick={async () => {
+                    setExp2Connecting(true);
+                    try {
+                      await fetch(`${API}/api/bot2/start`, { method: "POST" });
+                      await fetchExp2Status();
+                    } finally { setExp2Connecting(false); }
+                  }} disabled={exp2Connecting}>
+                    {exp2Connecting ? "CONNECTING..." : "▶ START EXPERIMENT 2"}
+                  </button>
+                ) : (
+                  <button className={styles.btnStop} onClick={async () => {
+                    await fetch(`${API}/api/bot2/stop`, { method: "POST" });
+                    await fetchExp2Status();
+                  }}>■ STOP EXPERIMENT 2</button>
+                )}
+              </div>
+
+              <div className={styles.panelTitle}>▲ EVENT LOG</div>
+              <div className={styles.eventLog}>
+                {(e2?.events || []).map((e, i) => (
+                  <div key={i} className={`${styles.event} ${styles["event_" + e.type]}`}>
+                    <span className={styles.eventTime}>{fmtTime(e.time)}</span>
+                    <span>{e.message}</span>
+                  </div>
+                ))}
+                {!e2?.events?.length && <div className={styles.empty}>Waiting for events...</div>}
               </div>
             </div>
           </div>
