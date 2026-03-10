@@ -98,10 +98,10 @@ class TradingBot {
         }])
       ),
       signals: [],        // latest signals
-      trades: saved.trades || [],         // trade history (last 100)
+      trades: [],         // populated from Alpaca activity history on start
       equityHistory: [],  // [{t, v}] for chart
-      wins: saved.wins || 0,
-      losses: saved.losses || 0,
+      wins: 0,
+      losses: 0,
       startValue: saved.startValue || 0,
       todayStartValue: 0,
       todayDate: null,        // tracks current date string for midnight reset
@@ -181,6 +181,9 @@ class TradingBot {
       this.running = true;
       this.addEvent('success', `Bot started in ${this.config.mode.toUpperCase()} mode`);
       this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)}`);
+
+      // Load trade history from Alpaca activities
+      await this.syncTradeHistory();
 
       // Sync existing positions from Alpaca
       await this.syncPositions();
@@ -289,6 +292,67 @@ class TradingBot {
       savePersistedState(this.state);
     } catch (err) {
       this.addEvent('warning', `Position sync failed: ${err.message}`);
+    }
+  }
+
+  // ─── TRADE HISTORY SYNC ─────────────────────────────────────────
+
+  async syncTradeHistory() {
+    try {
+      const fills = await alpaca.getActivities(
+        this.config.apiKey, this.config.secretKey, this.config.mode, 'FILL', 100
+      );
+      if (!fills || fills.length === 0) return;
+
+      // Build trades exclusively from Alpaca activity history
+      const trades = [];
+      for (const fill of fills) {
+        const raw = fill.symbol || '';
+        const symbol = raw.includes('/') ? raw : raw.replace(/USD$/, '/USD');
+        const side = (fill.side || '').toUpperCase();
+        const qty = parseFloat(fill.qty) || 0;
+        const price = parseFloat(fill.price) || 0;
+        const time = fill.transaction_time || fill.timestamp;
+        const notional = qty * price;
+
+        trades.push({ symbol, side, qty, price, notional, time, pnl: null });
+      }
+
+      // Sort oldest-first for P&L pairing
+      trades.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+      // Pair sells with their preceding buys to compute P&L
+      const buyMap = {}; // symbol -> most recent unmatched buy
+      for (const trade of trades) {
+        if (trade.side === 'BUY') {
+          buyMap[trade.symbol] = trade;
+        } else if (trade.side === 'SELL' && buyMap[trade.symbol]) {
+          const buy = buyMap[trade.symbol];
+          const pnl = (trade.price - buy.price) * trade.qty;
+          trade.pnl = parseFloat(pnl.toFixed(4));
+          delete buyMap[trade.symbol];
+        }
+      }
+
+      // Store newest-first, cap at 100
+      trades.reverse();
+      this.state.trades = trades.slice(0, 100);
+
+      // Compute wins/losses from closed trades
+      let wins = 0, losses = 0;
+      for (const t of this.state.trades) {
+        if (t.pnl != null) {
+          if (t.pnl > 0) wins++;
+          else losses++;
+        }
+      }
+      this.state.wins = wins;
+      this.state.losses = losses;
+
+      savePersistedState(this.state);
+      this.addEvent('info', `Loaded ${trades.length} trades from account history`);
+    } catch (err) {
+      this.addEvent('warning', `Trade history sync failed: ${err.message}`);
     }
   }
 
