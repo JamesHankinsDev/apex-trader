@@ -5,7 +5,7 @@ const cors = require('cors');
 const bot = require('./bot');
 const experimentBot = require('./experiment-bot');
 const experiment2Bot = require('./experiment2-bot');
-const { isBtcGateOpen } = require('./btcGate');
+const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
 
 const app = express();
 app.use(express.json());
@@ -27,6 +27,15 @@ app.get('/api/status', async (req, res) => {
     const secretKey = bot.config.secretKey || process.env.ALPACA_SECRET_KEY;
     if (apiKey && secretKey) {
       status.btcGate = await isBtcGateOpen(apiKey, secretKey, bot.streamHandle);
+      const regime = await getMarketRegime(apiKey, secretKey, bot.streamHandle);
+      status.regime = {
+        current: regime.regime,
+        fearGreed: regime.fearGreed,
+        extremeFear: regime.extremeFear,
+        capitulation: regime.capitulation,
+        btcPrice: regime.btcPrice,
+        sma50: regime.sma50,
+      };
     }
   } catch {}
   res.json(status);
@@ -88,6 +97,15 @@ app.get('/api/experiment/status', async (req, res) => {
     const secretKey = experimentBot.config.secretKey || process.env.EXPERIMENT_1_ALPACA_SECRET_KEY;
     if (apiKey && secretKey) {
       status.btcGate = await isBtcGateOpen(apiKey, secretKey, experimentBot.streamHandle);
+      const regime = await getMarketRegime(apiKey, secretKey, experimentBot.streamHandle);
+      status.regime = {
+        current: regime.regime,
+        fearGreed: regime.fearGreed,
+        extremeFear: regime.extremeFear,
+        capitulation: regime.capitulation,
+        btcPrice: regime.btcPrice,
+        sma50: regime.sma50,
+      };
     }
   } catch {}
   res.json(status);
@@ -127,6 +145,15 @@ app.get('/api/bot2/status', async (req, res) => {
     const secretKey = experiment2Bot.config.secretKey || process.env.EXPERIMENT_2_ALPACA_SECRET_KEY;
     if (apiKey && secretKey) {
       status.btcGate = await isBtcGateOpen(apiKey, secretKey, experiment2Bot.streamHandle);
+      const regime = await getMarketRegime(apiKey, secretKey, experiment2Bot.streamHandle);
+      status.regime = {
+        current: regime.regime,
+        fearGreed: regime.fearGreed,
+        extremeFear: regime.extremeFear,
+        capitulation: regime.capitulation,
+        btcPrice: regime.btcPrice,
+        sma50: regime.sma50,
+      };
     }
   } catch {}
   res.json(status);

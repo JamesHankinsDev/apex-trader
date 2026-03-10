@@ -5,7 +5,8 @@ const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluate } = require('./breakout-strategy');
 const cryptoStream = require('./crypto-stream');
-const { isBtcGateOpen } = require('./btcGate');
+const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
+const { evaluateBearEntry } = require('./bearStrategy');
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment2-state.json');
 const SPREAD_COST_PCT = 0.0015;
@@ -79,6 +80,7 @@ class Experiment2Bot {
       todayDate: null,
       startedAt: null,
       lastScan: null,
+      lastBearSignal: null,
       events: [],
     };
     this.scanTimer = null;
@@ -273,6 +275,20 @@ class Experiment2Bot {
         if (!livePrice || livePrice <= 0) continue;
 
         const signal = evaluate(symbol, bars, livePrice);
+
+        // Enrich with bar data for bear strategy
+        if (bars && bars.length > 0) {
+          const lastBar = bars[bars.length - 1];
+          signal.rsi14 = signal.rsi;
+          signal.volume = lastBar.v;
+          const volBars = bars.slice(-20);
+          signal.avgVolume20 = volBars.reduce((a, b) => a + b.v, 0) / volBars.length;
+          signal.open = lastBar.o;
+          signal.high = lastBar.h;
+          signal.low = lastBar.l;
+          signal.close = lastBar.c;
+        }
+
         signals.push(signal);
 
         // Check exits for open positions
@@ -304,9 +320,10 @@ class Experiment2Bot {
             continue;
           }
 
-          // Time exit (72 hours)
+          // Time exit (72 hours bull, 24 hours bear)
           const holdHours = (Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60);
-          if (holdHours >= this.config.maxHoldHours) {
+          const maxHold = pos.bearMode ? 24 : this.config.maxHoldHours;
+          if (holdHours >= maxHold) {
             await this.executeExit(symbol, livePrice, `TIME EXIT (${Math.round(holdHours)}h)`);
             continue;
           }
@@ -322,8 +339,25 @@ class Experiment2Bot {
     const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
     if (!gate.open) {
       this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
+
+      // Bear mode: try capitulation recovery entries
+      const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
+      if (regime.regime === 'bear') {
+        const openCount = Object.keys(this.state.positions).length;
+        if (openCount < this.config.maxPositions) {
+          for (const sig of signals) {
+            if (this.state.positions[sig.symbol]) continue;
+
+            const bearSignal = await evaluateBearEntry(sig, regime);
+            if (bearSignal) {
+              await this.executeBearEntry(bearSignal, sig);
+              break; // Only one entry per scan
+            }
+          }
+        }
+      }
     } else {
-      // Entry: only 1 position at a time
+      // Bull mode — entry: only 1 position at a time (unchanged)
       const openCount = Object.keys(this.state.positions).length;
       if (openCount < this.config.maxPositions) {
         for (const sig of signals) {
@@ -402,6 +436,57 @@ class Experiment2Bot {
 
       this.addEvent('success',
         `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.reasons.join(' · ')} | SL $${hardStop.toFixed(2)} | TP $${takeProfit.toFixed(2)}`
+      );
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+    } catch (err) {
+      this.addEvent('danger', `Order failed for ${symbol}: ${err.message}`);
+    }
+  }
+
+  // ─── BEAR ENTRY ─────────────────────────────────────────────
+
+  async executeBearEntry(bearSignal, signal) {
+    const { symbol, price } = signal;
+    const notional = Math.min(
+      this.state.portfolioValue * this.config.positionSize,
+      this.state.cashBalance
+    );
+    if (notional < 1) return;
+
+    try {
+      const order = await alpaca.placeOrder(
+        this.config.apiKey, this.config.secretKey, this.config.mode,
+        { symbol, side: 'buy', notional }
+      );
+
+      const fillPrice = await getFillPrice(
+        this.config.apiKey, this.config.secretKey, this.config.mode, order.id, price
+      );
+      const entryCost = notional * SPREAD_COST_PCT;
+      const qty = (notional - entryCost) / fillPrice;
+      const trailingStop = fillPrice * (1 - bearSignal.stopLoss);
+      const hardStop = fillPrice * (1 - bearSignal.stopLoss);
+      const takeProfit = fillPrice * (1 + bearSignal.takeProfit);
+
+      this.state.positions[symbol] = {
+        symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
+        entryTime: new Date().toISOString(),
+        highWaterMark: fillPrice,
+        trailingStop,
+        hardStop,
+        takeProfit,
+        bearMode: true,
+      };
+
+      this.state.lastBearSignal = {
+        coin: symbol,
+        rsi: signal.rsi14,
+        volMultiple: parseFloat((signal.volume / signal.avgVolume20).toFixed(1)),
+        time: new Date().toISOString(),
+      };
+
+      this.addEvent('success',
+        `[EXP2][BEAR] Capitulation entry on ${symbol} @ $${fillPrice.toFixed(4)} | SL $${hardStop.toFixed(2)} | TP $${takeProfit.toFixed(2)}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {
@@ -497,6 +582,7 @@ class Experiment2Bot {
       lastScan: this.state.lastScan,
       startedAt: this.state.startedAt,
       events: this.state.events,
+      lastBearSignal: this.state.lastBearSignal,
       cooldowns: this.state.cooldowns,
     };
   }

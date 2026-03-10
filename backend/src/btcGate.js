@@ -3,9 +3,13 @@
 // Cached for 15 minutes. Does NOT affect exits.
 
 const alpaca = require('./alpaca');
+const axios = require('axios');
 
 let cache = null; // { result, fetchedAt }
 const CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
+let fngCache = null; // { result, fetchedAt } — separate cache for Fear & Greed
+const FNG_CACHE_TTL = 15 * 60 * 1000;
 const FIFTY_FIVE_DAYS_MS = 55 * 24 * 60 * 60 * 1000; // extra margin for 50 daily bars
 
 /**
@@ -56,4 +60,44 @@ async function isBtcGateOpen(apiKey, secretKey, streamHandle) {
   }
 }
 
-module.exports = { isBtcGateOpen };
+/**
+ * Full market regime detection — layers Fear & Greed on top of BTC gate.
+ * Cached separately from the gate check (15-min TTL each).
+ *
+ * @param {string} apiKey
+ * @param {string} secretKey
+ * @param {string} [streamHandle]
+ * @returns {Promise<{ regime, btcPrice, sma50, btcGateOpen, fearGreed, extremeFear, capitulation }>}
+ */
+async function getMarketRegime(apiKey, secretKey, streamHandle) {
+  const gateResult = await isBtcGateOpen(apiKey, secretKey, streamHandle);
+
+  // Fetch Fear & Greed Index (cached separately)
+  let fearGreed;
+  if (fngCache && (Date.now() - fngCache.fetchedAt) < FNG_CACHE_TTL) {
+    fearGreed = fngCache.result;
+  } else {
+    try {
+      const res = await axios.get('https://api.alternative.me/fng/');
+      const value = parseInt(res.data.data[0].value);
+      const label = res.data.data[0].value_classification;
+      fearGreed = { value, label };
+      fngCache = { result: fearGreed, fetchedAt: Date.now() };
+    } catch (err) {
+      console.log('[REGIME] Fear & Greed fetch failed — defaulting to 50');
+      fearGreed = { value: 50, label: 'Unknown' };
+    }
+  }
+
+  return {
+    regime: gateResult.open ? 'bull' : 'bear',
+    btcPrice: gateResult.btcPrice,
+    sma50: gateResult.sma50,
+    btcGateOpen: gateResult.open,
+    fearGreed,
+    extremeFear: fearGreed.value < 20,
+    capitulation: fearGreed.value < 15,
+  };
+}
+
+module.exports = { isBtcGateOpen, getMarketRegime };

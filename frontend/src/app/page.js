@@ -356,34 +356,52 @@ export default function Dashboard() {
 
       {/* TABS */}
       <div className={styles.tabBar}>
-        <button className={activeTab === "main" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("main")}>
-          MAIN BOT
-        </button>
-        <button className={activeTab === "experiment" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("experiment")}>
-          EXPERIMENT 1
-        </button>
-        <button className={activeTab === "experiment2" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("experiment2")}>
-          EXPERIMENT 2
-        </button>
+        {(() => {
+          const r = status?.regime || expStatus?.regime || exp2Status?.regime;
+          const badge = r ? (r.current === "bear" ? " \uD83D\uDD34 BEAR" : " \uD83D\uDFE2 BULL") : "";
+          return <>
+            <button className={activeTab === "main" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("main")}>
+              Main Bot (Momentum){badge}
+            </button>
+            <button className={activeTab === "experiment" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("experiment")}>
+              Experiment 1 (Mean Reversion){badge}
+            </button>
+            <button className={activeTab === "experiment2" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("experiment2")}>
+              Experiment 2 (Hybrid){badge}
+            </button>
+          </>;
+        })()}
       </div>
 
-      {/* BTC MACRO GATE INDICATOR */}
+      {/* BTC MACRO GATE + REGIME INDICATOR */}
       {(() => {
         const gate = status?.btcGate || expStatus?.btcGate || exp2Status?.btcGate;
+        const regime = status?.regime || expStatus?.regime || exp2Status?.regime;
         if (!gate) return null;
+        const isBull = gate.open;
+        const fg = regime?.fearGreed;
         return (
           <div style={{
-            display: "flex", alignItems: "center", gap: 10,
+            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
             padding: "8px 20px",
             borderBottom: "1px solid var(--border)",
-            background: gate.open ? "rgba(0,255,136,0.05)" : "rgba(255,51,85,0.08)",
+            background: isBull ? "rgba(0,255,136,0.05)" : "rgba(255,51,85,0.08)",
             fontFamily: "var(--font-mono)", fontSize: 12,
           }}>
-            <span style={{ fontSize: 14 }}>{gate.open ? "\uD83D\uDFE2" : "\uD83D\uDD34"}</span>
-            <span style={{ color: gate.open ? "#00ff88" : "#ff3355", fontWeight: 600 }}>
-              BTC Gate: {gate.open ? "Open" : "Closed"}
+            <span style={{ fontSize: 14 }}>{isBull ? "\uD83D\uDFE2" : "\uD83D\uDD34"}</span>
+            <span style={{ color: isBull ? "#00ff88" : "#ff3355", fontWeight: 600 }}>
+              BTC Gate {isBull ? "Open" : "Closed"}
             </span>
-            {!gate.open && <span style={{ color: "#ff6680" }}>— No new entries</span>}
+            {fg && (
+              <span style={{ color: fg.value < 20 ? "#ff3355" : fg.value > 60 ? "#00ff88" : "var(--yellow)" }}>
+                | Fear & Greed: {fg.value} ({fg.label})
+              </span>
+            )}
+            {regime?.capitulation && (
+              <span style={{ color: "#ff3355", fontWeight: 700 }}>
+                {"\u26A1"} Capitulation Watch
+              </span>
+            )}
             <span style={{ color: "#666", marginLeft: "auto" }}>
               {gate.btcPrice > 0 ? `BTC ${fmt$(gate.btcPrice)} / 50-SMA ${fmt$(gate.sma50)}` : "Loading BTC data..."}
             </span>
@@ -648,6 +666,13 @@ export default function Dashboard() {
                 </div>
               );
             })
+          )}
+
+          {/* Bear signal indicator */}
+          {status?.regime?.current === "bear" && status?.lastBearSignal && (
+            <div style={{ padding: "8px 12px", margin: "6px 0", background: "rgba(255,51,85,0.08)", border: "1px solid rgba(255,51,85,0.2)", borderRadius: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
+              Last Bear Signal: {status.lastBearSignal.coin?.replace("/USD", "")} | RSI: {status.lastBearSignal.rsi} | Vol: {status.lastBearSignal.volMultiple}x | {fmtTime(status.lastBearSignal.time)}
+            </div>
           )}
         </div>
 
@@ -1114,6 +1139,13 @@ export default function Dashboard() {
                   );
                 })
               )}
+
+              {/* Bear signal indicator */}
+              {es?.regime?.current === "bear" && es?.lastBearSignal && (
+                <div style={{ padding: "8px 12px", margin: "6px 0", background: "rgba(255,51,85,0.08)", border: "1px solid rgba(255,51,85,0.2)", borderRadius: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
+                  Last Bear Signal: {es.lastBearSignal.coin?.replace("/USD", "")} | RSI: {es.lastBearSignal.rsi} | Vol: {es.lastBearSignal.volMultiple}x | {fmtTime(es.lastBearSignal.time)}
+                </div>
+              )}
             </div>
 
             {/* CENTER: Chart + Trade log */}
@@ -1325,6 +1357,13 @@ export default function Dashboard() {
                     </div>
                   );
                 })
+              )}
+
+              {/* Bear signal indicator */}
+              {e2?.regime?.current === "bear" && e2?.lastBearSignal && (
+                <div style={{ padding: "8px 12px", margin: "6px 0", background: "rgba(255,51,85,0.08)", border: "1px solid rgba(255,51,85,0.2)", borderRadius: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
+                  Last Bear Signal: {e2.lastBearSignal.coin?.replace("/USD", "")} | RSI: {e2.lastBearSignal.rsi} | Vol: {e2.lastBearSignal.volMultiple}x | {fmtTime(e2.lastBearSignal.time)}
+                </div>
               )}
             </div>
 
