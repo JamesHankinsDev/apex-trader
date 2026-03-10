@@ -32,6 +32,7 @@ function savePersistedState(state) {
       losses: state.losses,
       trades: state.trades,
       positions: serializablePositions,
+      config: state._config,
     }, null, 2));
   } catch {}
 }
@@ -92,6 +93,12 @@ class TradingBot {
     };
 
     const saved = loadPersistedState();
+
+    // Restore persisted config overrides (from UI slider changes)
+    if (saved.config) {
+      Object.assign(this.config, saved.config);
+    }
+
     this.state = {
       portfolioValue: 0,
       cashBalance: 0,
@@ -109,6 +116,7 @@ class TradingBot {
       startValue: saved.startValue || 0,
       todayStartValue: 0,
       todayDate: null,        // tracks current date string for midnight reset
+      _config: saved.config || null,
       startedAt: null,
       lastScan: null,
       events: [],         // system event log (last 50)
@@ -216,6 +224,12 @@ class TradingBot {
       clearInterval(this.scanTimer);
       this.scanTimer = setInterval(() => this.runScan(), this.config.scanInterval * 1000);
     }
+
+    // Persist config so it survives restarts
+    this.state._config = {};
+    allowed.forEach(k => { this.state._config[k] = this.config[k]; });
+    savePersistedState(this.state);
+
     this.addEvent('info', 'Configuration updated');
   }
 

@@ -170,20 +170,8 @@ export default function Dashboard() {
   const [secretKey, setSecretKey] = useState("");
   const [mode, setMode] = useState("paper");
   const [showGuide, setShowGuide] = useState(false);
-  const [config, setConfig] = useState({
-    positionSize: 33,
-    stopLoss: 5,
-    takeProfit: 15,
-    rsiBuy: 35,
-    rsiSell: 70,
-    scanInterval: 60,
-    maxPositions: 3,
-    dailyLossLimit: 5,
-    trailingStopActivate: 2,
-    trailingStopDistance: 2.5,
-    maxHoldHours: 24,
-    entryScoreThreshold: 65,
-  });
+  const [config, setConfig] = useState(null);
+  const configSynced = useRef(false);
 
   // Clock
   useEffect(() => {
@@ -211,26 +199,29 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [fetchStatus]);
 
-  // Sync config from status
+  // Sync config from backend on first load and whenever bot starts/stops
   useEffect(() => {
     if (status?.config) {
-      setConfig({
-        positionSize: Math.round(status.config.positionSize * 100),
-        stopLoss: Math.round(status.config.stopLoss * 100),
-        takeProfit: Math.round(status.config.takeProfit * 100),
-        rsiBuy: status.config.rsiBuy,
-        rsiSell: status.config.rsiSell,
-        scanInterval: status.config.scanInterval,
-        maxPositions: status.config.maxPositions,
-        dailyLossLimit: Math.round(status.config.dailyLossLimit * 100),
-        trailingStopActivate: parseFloat((status.config.trailingStopActivate * 100).toFixed(1)),
-        trailingStopDistance: parseFloat((status.config.trailingStopDistance * 100).toFixed(1)),
-        maxHoldHours: status.config.maxHoldHours,
-        entryScoreThreshold: status.config.entryScoreThreshold,
-      });
+      if (!configSynced.current) {
+        configSynced.current = true;
+        setConfig({
+          positionSize: Math.round(status.config.positionSize * 100),
+          stopLoss: Math.round(status.config.stopLoss * 100),
+          takeProfit: Math.round(status.config.takeProfit * 100),
+          rsiBuy: status.config.rsiBuy,
+          rsiSell: status.config.rsiSell,
+          scanInterval: status.config.scanInterval,
+          maxPositions: status.config.maxPositions,
+          dailyLossLimit: Math.round(status.config.dailyLossLimit * 100),
+          trailingStopActivate: parseFloat((status.config.trailingStopActivate * 100).toFixed(1)),
+          trailingStopDistance: parseFloat((status.config.trailingStopDistance * 100).toFixed(1)),
+          maxHoldHours: status.config.maxHoldHours,
+          entryScoreThreshold: status.config.entryScoreThreshold,
+        });
+      }
       setMode(status.mode);
     }
-  }, [status?.running]);
+  }, [status]);
 
   const handleStart = async () => {
     setConnecting(true);
@@ -595,6 +586,22 @@ export default function Dashboard() {
                     {pos.entryTime ? new Date(pos.entryTime).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "—"} · ${pos.notional?.toFixed(2)}{" "}
                     invested
                   </div>
+                  <button
+                    className={styles.btnSell}
+                    onClick={async () => {
+                      if (!confirm(`Sell ${pos.symbol?.replace("/USD", "")} now?`)) return;
+                      try {
+                        await fetch(`${API}/api/trade`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ symbol: pos.symbol, side: "sell" }),
+                        });
+                        fetchStatus();
+                      } catch {}
+                    }}
+                  >
+                    SELL
+                  </button>
                 </div>
               );
             })
@@ -783,7 +790,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className={styles.configSection}>
+          {config && <div className={styles.configSection}>
             <div className={styles.configLabel}>STRATEGY PARAMETERS</div>
             {[
               {
@@ -940,7 +947,7 @@ export default function Dashboard() {
             <button className={styles.btnApply} onClick={handleConfigUpdate}>
               APPLY CONFIG
             </button>
-          </div>
+          </div>}
 
           <div className={styles.configSection}>
             {!running ? (
