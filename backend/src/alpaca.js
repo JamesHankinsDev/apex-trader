@@ -84,6 +84,16 @@ async function getPortfolioHistory(apiKey, secretKey, mode, params = {}) {
   return res.data;
 }
 
+// Get recent fill activities (to find actual entry timestamps)
+async function getActivities(apiKey, secretKey, mode, activityType = 'FILL', limit = 100) {
+  const res = await axios.get(`${getBaseUrl(mode)}/v2/account/activities/${activityType}`, {
+    headers: getHeaders(apiKey, secretKey),
+    params: { direction: 'desc', page_size: limit },
+    timeout: 8000,
+  });
+  return res.data;
+}
+
 // ── MARKET DATA (Alpaca primary, CoinGecko fallback) ─────────
 
 // Fetch OHLCV bars from Alpaca crypto data API
@@ -196,6 +206,7 @@ module.exports = {
   getPositions,
   getOrder,
   getPortfolioHistory,
+  getActivities,
   placeOrder,
   closePosition,
   getLatestCryptoPrice,

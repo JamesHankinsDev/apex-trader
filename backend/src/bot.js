@@ -19,11 +19,19 @@ function loadPersistedState() {
 
 function savePersistedState(state) {
   try {
+    // Convert Infinity to string for JSON serialization
+    const serializablePositions = Object.fromEntries(
+      Object.entries(state.positions || {}).map(([k, v]) => [k, {
+        ...v,
+        targetPrice: v.targetPrice === Infinity ? '__INF__' : v.targetPrice,
+      }])
+    );
     fs.writeFileSync(STATE_FILE, JSON.stringify({
       startValue: state.startValue,
       wins: state.wins,
       losses: state.losses,
       trades: state.trades,
+      positions: serializablePositions,
     }, null, 2));
   } catch {}
 }
@@ -87,7 +95,12 @@ class TradingBot {
     this.state = {
       portfolioValue: 0,
       cashBalance: 0,
-      positions: {},      // symbol -> position data
+      positions: Object.fromEntries(
+        Object.entries(saved.positions || {}).map(([k, v]) => [k, {
+          ...v,
+          targetPrice: v.targetPrice === '__INF__' ? Infinity : v.targetPrice,
+        }])
+      ),
       signals: [],        // latest signals
       trades: saved.trades || [],         // trade history (last 100)
       equityHistory: [],  // [{t, v}] for chart
@@ -222,6 +235,24 @@ class TradingBot {
         this.config.apiKey, this.config.secretKey, this.config.mode
       );
 
+      // Fetch recent fill activities to get actual entry timestamps
+      let fillsBySymbol = {};
+      try {
+        const fills = await alpaca.getActivities(
+          this.config.apiKey, this.config.secretKey, this.config.mode, 'FILL'
+        );
+        // Build map of earliest BUY fill per symbol (most recent fills come first)
+        for (const fill of fills) {
+          if (fill.side === 'buy') {
+            const sym = fill.symbol?.replace(/USD$/, '/USD');
+            // Keep the earliest buy (last in desc order), so just overwrite
+            fillsBySymbol[sym] = fill.transaction_time || fill.timestamp;
+          }
+        }
+      } catch (err) {
+        this.addEvent('warning', `Could not fetch activities: ${err.message}`);
+      }
+
       // Track which symbols Alpaca reports
       const alpacaSymbols = new Set();
 
@@ -246,7 +277,7 @@ class TradingBot {
             qty,
             notional,
             entryCost: notional * SPREAD_COST_PCT,
-            entryTime: pos.created_at || new Date().toISOString(),
+            entryTime: fillsBySymbol[symbol] || new Date().toISOString(),
             stopPrice: entryPrice * (1 - this.config.stopLoss),
             targetPrice: entryPrice * (1 + this.config.takeProfit),
             synced: true,
@@ -258,6 +289,10 @@ class TradingBot {
         } else {
           // Update qty from Alpaca in case of partial fills
           this.state.positions[symbol].qty = parseFloat(pos.qty);
+          // Fix entry time from activities if it was previously set to bot start time
+          if (fillsBySymbol[symbol] && this.state.positions[symbol].synced) {
+            this.state.positions[symbol].entryTime = fillsBySymbol[symbol];
+          }
         }
       }
 
@@ -268,6 +303,7 @@ class TradingBot {
           delete this.state.positions[symbol];
         }
       }
+      savePersistedState(this.state);
     } catch (err) {
       this.addEvent('warning', `Position sync failed: ${err.message}`);
     }
@@ -510,6 +546,7 @@ class TradingBot {
       });
 
       delete this.state.positions[symbol];
+      savePersistedState(this.state);
 
     } catch (err) {
       this.addEvent('danger', `Exit failed for ${symbol}: ${err.message}`);
@@ -648,7 +685,12 @@ class TradingBot {
       cashBalance: this.state.cashBalance,
       startValue: this.state.startValue,
       todayStartValue: this.state.todayStartValue,
-      positions: this.state.positions,
+      positions: Object.fromEntries(
+        Object.entries(this.state.positions).map(([k, v]) => [k, {
+          ...v,
+          targetPrice: v.targetPrice === Infinity ? 'TRAILING' : v.targetPrice,
+        }])
+      ),
       signals: this.state.signals,
       trades: this.state.trades.slice(0, 50),
       equityHistory: this.state.equityHistory.slice(-200),

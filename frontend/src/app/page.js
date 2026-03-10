@@ -586,7 +586,7 @@ export default function Dashboard() {
                     {fmt$(curPrice)}
                   </div>
                   <div className={styles.posDetails}>
-                    SL {fmt$(pos.stopPrice)} · TP {pos.targetPrice === Infinity || !isFinite(pos.targetPrice) ? "TRAILING" : fmt$(pos.targetPrice)}
+                    SL {fmt$(pos.stopPrice)} · TP {pos.targetPrice === "TRAILING" ? "🚀 Chasing Gains" : fmt$(pos.targetPrice)}
                   </div>
                   <div
                     className={styles.posDetails}
