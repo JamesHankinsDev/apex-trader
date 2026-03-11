@@ -160,6 +160,90 @@ function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }
   return <canvas ref={canvasRef} style={{ display: "block", width: "100%" }} />;
 }
 
+// ─── WEEKLY PROGRESS CHART ────────────────────────────────────
+function WeeklyChart({ snapshots }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !snapshots?.length) return;
+    const container = canvas.parentElement;
+    const W = container.clientWidth - 8;
+    const H = 100;
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+
+    const bots = [
+      { key: "main", color: "#00ff88", label: "Main" },
+      { key: "exp1", color: "#4488ff", label: "Exp1" },
+      { key: "exp2", color: "#ff9900", label: "Exp2" },
+    ];
+
+    // Collect all return values for Y range
+    const allVals = [];
+    for (const b of bots) {
+      for (const s of snapshots) {
+        if (s[b.key]?.totalReturnPct != null) allVals.push(s[b.key].totalReturnPct);
+      }
+    }
+    if (allVals.length === 0) return;
+
+    const minV = Math.min(0, ...allVals) - 1;
+    const maxV = Math.max(0, ...allVals) + 1;
+    const range = maxV - minV || 1;
+    const toY = (v) => H - ((v - minV) / range) * H;
+    const toX = (i) => snapshots.length > 1 ? (i / (snapshots.length - 1)) * W : W / 2;
+
+    // Zero line
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, toY(0));
+    ctx.lineTo(W, toY(0));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw lines per bot
+    for (const b of bots) {
+      const pts = snapshots.map((s) => s[b.key]?.totalReturnPct ?? 0);
+      ctx.beginPath();
+      pts.forEach((v, i) => (i === 0 ? ctx.moveTo(toX(i), toY(v)) : ctx.lineTo(toX(i), toY(v))));
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Dot at end
+      if (pts.length > 0) {
+        const lastI = pts.length - 1;
+        ctx.beginPath();
+        ctx.arc(toX(lastI), toY(pts[lastI]), 3, 0, Math.PI * 2);
+        ctx.fillStyle = b.color;
+        ctx.fill();
+      }
+    }
+
+    // Legend
+    let lx = 8;
+    ctx.font = "10px Share Tech Mono, monospace";
+    for (const b of bots) {
+      ctx.beginPath();
+      ctx.moveTo(lx, 10);
+      ctx.lineTo(lx + 14, 10);
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = b.color;
+      ctx.fillText(b.label, lx + 18, 14);
+      lx += 60;
+    }
+  }, [snapshots]);
+
+  return <canvas ref={canvasRef} style={{ display: "block", width: "100%" }} />;
+}
+
 // ─── MAIN PAGE ────────────────────────────────────────────────
 export default function Dashboard() {
   const [status, setStatus] = useState(null);
@@ -176,6 +260,7 @@ export default function Dashboard() {
   const [expConnecting, setExpConnecting] = useState(false);
   const [exp2Status, setExp2Status] = useState(null);
   const [exp2Connecting, setExp2Connecting] = useState(false);
+  const [leaderboard, setLeaderboard] = useState(null);
 
   // Clock
   useEffect(() => {
@@ -230,6 +315,20 @@ export default function Dashboard() {
     const id = setInterval(fetchExp2Status, 5000);
     return () => clearInterval(id);
   }, [fetchExp2Status]);
+
+  // Poll leaderboard every 60s
+  const fetchLeaderboard = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/leaderboard`);
+      if (res.ok) setLeaderboard(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchLeaderboard();
+    const id = setInterval(fetchLeaderboard, 60000);
+    return () => clearInterval(id);
+  }, [fetchLeaderboard]);
 
   // Sync config from backend (read-only, set via env variables)
   useEffect(() => {
@@ -353,6 +452,110 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+
+      {/* LEADERBOARD */}
+      {leaderboard && (() => {
+        const lb = leaderboard;
+        const bots = [
+          { key: "main", name: "Main (Momentum)" },
+          { key: "exp1", name: "Exp 1 (Mean Rev)" },
+          { key: "exp2", name: "Exp 2 (Hybrid)" },
+        ];
+        return (
+          <div style={{
+            padding: "12px 20px",
+            borderBottom: "1px solid var(--border)",
+            background: "rgba(5,5,8,0.9)",
+          }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+              <span style={{ fontFamily: "var(--font-display)", fontSize: 14, letterSpacing: 2, color: "var(--text)" }}>
+                LEADERBOARD
+              </span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--dim)" }}>
+                Paper trading — $100 per bot | Winner goes live
+              </span>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{
+                width: "100%", borderCollapse: "collapse",
+                fontFamily: "var(--font-mono)", fontSize: 11,
+              }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--dim)" }}>
+                    <th style={{ textAlign: "left", padding: "4px 8px" }}>Bot</th>
+                    <th style={{ textAlign: "right", padding: "4px 8px" }}>Balance</th>
+                    <th style={{ textAlign: "right", padding: "4px 8px" }}>Return</th>
+                    <th style={{ textAlign: "right", padding: "4px 8px" }}>Win Rate</th>
+                    <th style={{ textAlign: "right", padding: "4px 8px" }}>Sharpe</th>
+                    <th style={{ textAlign: "right", padding: "4px 8px" }}>Bull P&L</th>
+                    <th style={{ textAlign: "right", padding: "4px 8px" }}>Bear P&L</th>
+                    <th style={{ textAlign: "right", padding: "4px 8px" }}>Trades</th>
+                    <th style={{ textAlign: "center", padding: "4px 8px" }}>Leader</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bots.map((b) => {
+                    const s = lb.bots[b.key];
+                    if (!s) return null;
+                    const isLeader = lb.leader === b.key;
+                    return (
+                      <tr key={b.key} style={{
+                        borderBottom: "1px solid var(--border)",
+                        background: isLeader ? "rgba(0,255,136,0.06)" : "transparent",
+                      }}>
+                        <td style={{ padding: "6px 8px", color: "var(--text)", fontWeight: isLeader ? 600 : 400 }}>
+                          {b.name}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "6px 8px" }}>
+                          {fmt$(s.currentBalance)}
+                        </td>
+                        <td style={{
+                          textAlign: "right", padding: "6px 8px",
+                          color: s.totalReturnPct >= 0 ? "var(--green)" : "var(--red)",
+                        }}>
+                          {fmtPct(s.totalReturnPct)}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "6px 8px" }}>
+                          {s.totalTrades > 0 ? `${s.winRate.toFixed(0)}%` : "—"}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "6px 8px" }}>
+                          {s.sharpeRatio != null ? s.sharpeRatio.toFixed(2) : "—"}
+                        </td>
+                        <td style={{
+                          textAlign: "right", padding: "6px 8px",
+                          color: s.bullReturnPct >= 0 ? "var(--green)" : "var(--red)",
+                        }}>
+                          {s.bullTrades > 0 ? fmtPct(s.bullReturnPct) : "—"}
+                        </td>
+                        <td style={{
+                          textAlign: "right", padding: "6px 8px",
+                          color: s.bearReturnPct >= 0 ? "var(--green)" : "var(--red)",
+                        }}>
+                          {s.bearTrades > 0 ? fmtPct(s.bearReturnPct) : "—"}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "6px 8px" }}>
+                          {s.totalTrades}
+                        </td>
+                        <td style={{ textAlign: "center", padding: "6px 8px" }}>
+                          {isLeader ? "\uD83C\uDFC6" : ""}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {lb.weeklySnapshots?.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--dim)", marginBottom: 4 }}>
+                  WEEKLY PROGRESS (Total Return %)
+                </div>
+                <WeeklyChart snapshots={lb.weeklySnapshots} />
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* TABS */}
       <div className={styles.tabBar}>

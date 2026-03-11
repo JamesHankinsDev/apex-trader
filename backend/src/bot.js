@@ -7,6 +7,7 @@ const benchmark = require('./benchmark');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
 const { evaluateBearEntry, setBearCooldown } = require('./bearStrategy');
+const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
 
 // Persistent state file (survives restarts)
 const STATE_FILE = path.join(__dirname, '..', '.bot-state.json');
@@ -537,6 +538,7 @@ class TradingBot {
         if (sig.price > 0) currentPrices[sig.symbol] = sig.price;
       }
       benchmark.update(currentPrices);
+      updateBalance('main', this.state.portfolioValue);
     } catch {}
   }
 
@@ -731,6 +733,27 @@ class TradingBot {
         symbol, side: 'SELL', qty: pos.qty, price: exitPrice,
         notional: pos.notional, time: new Date().toISOString(),
         pnl: parseFloat(pnl.toFixed(4)), fees: parseFloat(totalCost.toFixed(4)), reason
+      });
+
+      // Record to performance tracker
+      const pnlPct = (exitPrice - pos.entryPrice) / pos.entryPrice * 100;
+      let perfExitReason = 'timeExit';
+      if (reason.includes('TAKE PROFIT')) perfExitReason = 'takeProfit';
+      else if (reason.includes('STOP LOSS')) perfExitReason = 'stopLoss';
+      else if (reason.includes('PROFIT PROTECT')) perfExitReason = 'takeProfit';
+      else if (reason.includes('TIME EXIT')) perfExitReason = 'timeExit';
+      recordPerfTrade({
+        bot: 'main',
+        coin: symbol,
+        entryPrice: pos.entryPrice,
+        exitPrice,
+        entryTime: pos.entryTime,
+        exitTime: new Date().toISOString(),
+        pnlPct: parseFloat(pnlPct.toFixed(2)),
+        pnlUsd: parseFloat(pnl.toFixed(2)),
+        exitReason: perfExitReason,
+        regime: pos.bearMode ? 'bear' : 'bull',
+        type: pos.bearMode ? 'bear_range_trade' : 'momentum',
       });
 
       delete this.state.positions[symbol];

@@ -6,7 +6,9 @@ const alpaca = require('./alpaca');
 const { evaluate } = require('./mean-reversion-strategy');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
-const { evaluateBearEntry, setBearCooldown } = require('./bearStrategy');
+const { evaluateBearEntry1 } = require('./bearStrategy1');
+const { setBearCooldown } = require('./bearStrategy');
+const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment-state.json');
 const SPREAD_COST_PCT = 0.0015;
@@ -311,9 +313,10 @@ class ExperimentBot {
             continue;
           }
 
-          // Time exit
+          // Time exit (36h for bear dead cat, normal maxHoldHours for bull)
           const holdHours = (Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60);
-          if (holdHours >= this.config.maxHoldHours) {
+          const maxHold = pos.bearMode ? 36 : this.config.maxHoldHours;
+          if (holdHours >= maxHold) {
             await this.executeExit(symbol, livePrice, `TIME EXIT (${Math.round(holdHours)}h)`);
             continue;
           }
@@ -330,7 +333,7 @@ class ExperimentBot {
     if (!gate.open) {
       this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
 
-      // Bear mode: try channel range trade entries
+      // Bear mode: try dead cat bounce entries
       const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
       if (regime.regime === 'bear') {
         let openCount = Object.keys(this.state.positions).length;
@@ -338,13 +341,8 @@ class ExperimentBot {
           if (openCount >= this.config.maxPositions) break;
           if (this.state.positions[sig.symbol]) continue;
 
-          const bearSignal = await evaluateBearEntry(sig, regime, sig.symbol, {
-            rsiOverride: 35, // Mean reversion: deeper oversold requirement
-            apiKey: this.config.apiKey,
-            secretKey: this.config.secretKey,
-          });
+          const bearSignal = await evaluateBearEntry1(sig, regime, sig.symbol);
           if (bearSignal) {
-            this.addEvent('info', '[EXP1][BEAR] Range entry — mean reversion confirmation');
             await this.executeBearEntry(bearSignal, sig);
             openCount++;
           }
@@ -377,6 +375,7 @@ class ExperimentBot {
       }
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
       if (this.state.equityHistory.length > 500) this.state.equityHistory.shift();
+      updateBalance('exp1', this.state.portfolioValue);
     } catch {}
   }
 
@@ -436,31 +435,31 @@ class ExperimentBot {
       const entryCost = notional * SPREAD_COST_PCT;
       const qty = (notional - entryCost) / fillPrice;
 
+      const stopPrice = fillPrice * (1 - bearSignal.stopLoss);
+      const targetPrice = fillPrice * (1 + bearSignal.takeProfit);
+
       this.state.positions[symbol] = {
         symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
         entryTime: new Date().toISOString(),
         avg24h: signal.avg24h,
         deviation: signal.deviation,
-        stopPrice: bearSignal.stopLossPrice,
-        targetPrice: bearSignal.takeProfitPrice,
+        stopPrice,
+        targetPrice,
         bearMode: true,
+        bearType: bearSignal.type,
       };
 
       this.state.lastBearSignal = {
         coin: symbol,
-        type: 'bear_range_trade',
+        type: bearSignal.type,
         entryPrice: fillPrice,
-        tpPrice: bearSignal.takeProfitPrice,
-        channelSupport: bearSignal.channelSupport,
-        channelResist: bearSignal.channelResist,
-        channelWidth: bearSignal.channelWidth,
-        rsi: bearSignal.rsi,
-        volMultiple: bearSignal.volMultiple,
+        tpPrice: targetPrice,
+        slPrice: stopPrice,
         time: new Date().toISOString(),
       };
 
       this.addEvent('success',
-        `[EXP1][BEAR] Range entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | TP $${bearSignal.takeProfitPrice.toFixed(2)} SL $${bearSignal.stopLossPrice.toFixed(2)}`
+        `[EXP1][BEAR] Dead cat entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | TP $${targetPrice.toFixed(2)} SL $${stopPrice.toFixed(2)}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {
@@ -493,6 +492,27 @@ class ExperimentBot {
       this.recordTrade({
         symbol, side: 'SELL', qty: pos.qty, price: exitPrice, notional: pos.notional,
         time: new Date().toISOString(), pnl: parseFloat(pnl.toFixed(4)), reason,
+      });
+
+      // Record to performance tracker
+      const pnlPct = (exitPrice - pos.entryPrice) / pos.entryPrice * 100;
+      let exitReason = 'timeExit';
+      if (reason.includes('TAKE PROFIT') || reason.includes('BEAR TAKE PROFIT')) exitReason = 'takeProfit';
+      else if (reason.includes('STOP LOSS') || reason.includes('BEAR STOP LOSS')) exitReason = 'stopLoss';
+      else if (reason.includes('MOMENTUM EXIT') || reason.includes('exhaustion')) exitReason = 'exhaustion';
+      else if (reason.includes('TIME EXIT')) exitReason = 'timeExit';
+      recordPerfTrade({
+        bot: 'exp1',
+        coin: symbol,
+        entryPrice: pos.entryPrice,
+        exitPrice,
+        entryTime: pos.entryTime,
+        exitTime: new Date().toISOString(),
+        pnlPct: parseFloat(pnlPct.toFixed(2)),
+        pnlUsd: parseFloat(pnl.toFixed(2)),
+        exitReason,
+        regime: pos.bearMode ? 'bear' : 'bull',
+        type: pos.bearType || 'mean_reversion',
       });
 
       delete this.state.positions[symbol];

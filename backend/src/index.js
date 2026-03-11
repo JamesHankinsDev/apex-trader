@@ -7,6 +7,7 @@ const experimentBot = require('./experiment-bot');
 const experiment2Bot = require('./experiment2-bot');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
 const { getChannelData } = require('./bearStrategy');
+const { getPerformanceStats, getWeeklySnapshots } = require('./performance');
 
 const app = express();
 app.use(express.json());
@@ -208,6 +209,34 @@ app.post('/api/bot2/trade', async (req, res) => {
     await experiment2Bot.executeExit(symbol, currentPrice, 'MANUAL CLOSE');
   }
   res.json({ ok: true });
+});
+
+// ─── LEADERBOARD ─────────────────────────────────────────────
+app.get('/api/leaderboard', (req, res) => {
+  const main = getPerformanceStats('main');
+  const exp1 = getPerformanceStats('exp1');
+  const exp2 = getPerformanceStats('exp2');
+
+  // Determine leader: prefer Sharpe if available for all, otherwise totalReturnPct
+  let leader = 'main';
+  let leadMetric = 'totalReturn';
+
+  if (main.sharpeRatio != null && exp1.sharpeRatio != null && exp2.sharpeRatio != null) {
+    leadMetric = 'sharpe';
+    if (exp1.sharpeRatio > main.sharpeRatio && exp1.sharpeRatio > exp2.sharpeRatio) leader = 'exp1';
+    else if (exp2.sharpeRatio > main.sharpeRatio && exp2.sharpeRatio > exp1.sharpeRatio) leader = 'exp2';
+  } else {
+    if (exp1.totalReturnPct > main.totalReturnPct && exp1.totalReturnPct > exp2.totalReturnPct) leader = 'exp1';
+    else if (exp2.totalReturnPct > main.totalReturnPct && exp2.totalReturnPct > exp1.totalReturnPct) leader = 'exp2';
+  }
+
+  res.json({
+    updatedAt: new Date().toISOString(),
+    bots: { main, exp1, exp2 },
+    leader,
+    leadMetric,
+    weeklySnapshots: getWeeklySnapshots(),
+  });
 });
 
 // ─── START SERVER ─────────────────────────────────────────────

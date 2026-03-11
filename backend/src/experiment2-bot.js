@@ -6,7 +6,8 @@ const alpaca = require('./alpaca');
 const { evaluate } = require('./breakout-strategy');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
-const { evaluateBearEntry, setBearCooldown } = require('./bearStrategy');
+const { evaluateBearEntry2, addTranche, checkTrancheExit, clearTranches, getBtcAccumulationStatus } = require('./bearStrategy2');
+const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment2-state.json');
 const SPREAD_COST_PCT = 0.0015;
@@ -309,32 +310,21 @@ class Experiment2Bot {
             continue;
           }
 
-          // Bear mode: exhaustion early exit — use breakout strategy's sell signal
-          if (pos.bearMode && signal.signal === 'sell') {
-            this.addEvent('info', `[EXP2][BEAR] Early exit — exhaustion at $${livePrice.toFixed(2)}`);
-            await this.executeExit(symbol, livePrice, `BEAR EXHAUSTION ($${livePrice.toFixed(2)})`);
-            // No cooldown on exhaustion exits
-            continue;
-          }
-
-          // Trailing stop (bull mode) / Hard stop (bear mode uses hardStop = stopLossPrice)
-          if (livePrice <= pos.trailingStop) {
+          // Trailing stop (bull mode only — bear uses DCA tranche system)
+          if (!pos.bearMode && livePrice <= pos.trailingStop) {
             await this.executeExit(symbol, livePrice, `TRAILING STOP ($${livePrice.toFixed(2)} <= $${pos.trailingStop.toFixed(2)})`, true);
-            if (pos.bearMode) setBearCooldown(symbol);
             continue;
           }
 
-          // Hard stop loss
-          if (livePrice <= pos.hardStop) {
+          // Hard stop loss (bull mode only)
+          if (!pos.bearMode && livePrice <= pos.hardStop) {
             await this.executeExit(symbol, livePrice, `HARD STOP ($${livePrice.toFixed(2)} <= $${pos.hardStop.toFixed(2)})`, true);
-            if (pos.bearMode) setBearCooldown(symbol);
             continue;
           }
 
-          // Time exit (48 hours bear, 72 hours bull)
+          // Time exit (bull mode only — bear tranches hold until gate reopens)
           const holdHours = (Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60);
-          const maxHold = pos.bearMode ? 48 : this.config.maxHoldHours;
-          if (holdHours >= maxHold) {
+          if (!pos.bearMode && holdHours >= this.config.maxHoldHours) {
             await this.executeExit(symbol, livePrice, `TIME EXIT (${Math.round(holdHours)}h)`);
             continue;
           }
@@ -351,27 +341,44 @@ class Experiment2Bot {
     if (!gate.open) {
       this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
 
-      // Bear mode: try channel range trade entries
+      // Bear mode: BTC DCA accumulation (ignore altcoins, accumulate BTC in tranches)
       const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
       if (regime.regime === 'bear') {
-        const openCount = Object.keys(this.state.positions).length;
-        if (openCount < this.config.maxPositions) {
-          for (const sig of signals) {
-            if (this.state.positions[sig.symbol]) continue;
-
-            const bearSignal = await evaluateBearEntry(sig, regime, sig.symbol, {
-              apiKey: this.config.apiKey,
-              secretKey: this.config.secretKey,
-            });
+        // Get current BTC price
+        const btcPrice = await alpaca.getLatestCryptoPrice(
+          this.config.apiKey, this.config.secretKey, 'BTC/USD', this.streamHandle
+        );
+        if (btcPrice && btcPrice > 0) {
+          // Check tranche exit conditions (emergency stop)
+          const exitSignal = checkTrancheExit(btcPrice, false);
+          if (exitSignal) {
+            // Exit all BTC positions
+            await this.exitAllBtcTranches(btcPrice, exitSignal.reason);
+          } else {
+            // Try to deploy a new tranche
+            const accStatus = getBtcAccumulationStatus();
+            const bearSignal = evaluateBearEntry2(regime, btcPrice, accStatus.trancheDetails || []);
             if (bearSignal) {
-              this.addEvent('info', '[EXP2][BEAR] Range entry — hybrid confirmation');
-              await this.executeBearEntry(bearSignal, sig);
-              break; // Only one entry per scan
+              await this.executeBtcTranche(btcPrice, bearSignal);
             }
           }
         }
       }
     } else {
+      // Gate reopened — exit all BTC tranches if any exist
+      const accStatus = getBtcAccumulationStatus();
+      if (accStatus.active) {
+        const btcPrice = await alpaca.getLatestCryptoPrice(
+          this.config.apiKey, this.config.secretKey, 'BTC/USD', this.streamHandle
+        );
+        if (btcPrice && btcPrice > 0) {
+          const exitSignal = checkTrancheExit(btcPrice, true);
+          if (exitSignal) {
+            await this.exitAllBtcTranches(btcPrice, exitSignal.reason);
+          }
+        }
+      }
+
       // Bull mode — entry: only 1 position at a time (unchanged)
       const openCount = Object.keys(this.state.positions).length;
       if (openCount < this.config.maxPositions) {
@@ -406,6 +413,7 @@ class Experiment2Bot {
       }
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
       if (this.state.equityHistory.length > 500) this.state.equityHistory.shift();
+      updateBalance('exp2', this.state.portfolioValue);
     } catch {}
   }
 
@@ -458,14 +466,12 @@ class Experiment2Bot {
     }
   }
 
-  // ─── BEAR ENTRY ─────────────────────────────────────────────
+  // ─── BTC DCA TRANCHE ENTRY ─────────────────────────────────
 
-  async executeBearEntry(bearSignal, signal) {
-    const { symbol, price } = signal;
-    const notional = Math.min(
-      this.state.portfolioValue * this.config.positionSize,
-      this.state.cashBalance
-    );
+  async executeBtcTranche(btcPrice, bearSignal) {
+    const symbol = 'BTC/USD';
+    const trancheNotional = this.state.cashBalance * bearSignal.tranchePct;
+    const notional = Math.min(trancheNotional, this.state.cashBalance);
     if (notional < 1) return;
 
     try {
@@ -475,40 +481,112 @@ class Experiment2Bot {
       );
 
       const fillPrice = await getFillPrice(
-        this.config.apiKey, this.config.secretKey, this.config.mode, order.id, price
+        this.config.apiKey, this.config.secretKey, this.config.mode, order.id, btcPrice
       );
       const entryCost = notional * SPREAD_COST_PCT;
       const qty = (notional - entryCost) / fillPrice;
 
-      this.state.positions[symbol] = {
-        symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
-        entryTime: new Date().toISOString(),
-        highWaterMark: fillPrice,
-        trailingStop: bearSignal.stopLossPrice,
-        hardStop: bearSignal.stopLossPrice,
-        takeProfit: bearSignal.takeProfitPrice,
-        bearMode: true,
-      };
+      // Track tranche in bearStrategy2
+      addTranche(fillPrice, notional);
+      const accStatus = getBtcAccumulationStatus();
+
+      // Track as a position (aggregate if BTC/USD already exists)
+      const existing = this.state.positions[symbol];
+      if (existing && existing.bearMode) {
+        // Aggregate: update average entry price and totals
+        const totalNotional = existing.notional + notional;
+        const totalQty = existing.qty + qty;
+        existing.entryPrice = (existing.entryPrice * existing.qty + fillPrice * qty) / totalQty;
+        existing.qty = totalQty;
+        existing.notional = totalNotional;
+        existing.entryCost = (existing.entryCost || 0) + entryCost;
+      } else {
+        this.state.positions[symbol] = {
+          symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
+          entryTime: new Date().toISOString(),
+          highWaterMark: fillPrice,
+          trailingStop: 0, // Not used for DCA — exit managed by tranche system
+          hardStop: 0,
+          takeProfit: Infinity,
+          bearMode: true,
+          bearType: 'btc_dca_accumulation',
+        };
+      }
 
       this.state.lastBearSignal = {
         coin: symbol,
-        type: 'bear_range_trade',
+        type: 'btc_dca_accumulation',
+        tranche: accStatus.tranches,
         entryPrice: fillPrice,
-        tpPrice: bearSignal.takeProfitPrice,
-        channelSupport: bearSignal.channelSupport,
-        channelResist: bearSignal.channelResist,
-        channelWidth: bearSignal.channelWidth,
-        rsi: bearSignal.rsi,
-        volMultiple: bearSignal.volMultiple,
+        avgEntry: accStatus.avgEntry,
+        totalAmount: accStatus.totalAmount,
         time: new Date().toISOString(),
       };
 
       this.addEvent('success',
-        `[EXP2][BEAR] Range entry on ${symbol} @ $${fillPrice.toFixed(4)} | SL $${bearSignal.stopLossPrice.toFixed(2)} | TP $${bearSignal.takeProfitPrice.toFixed(2)}`
+        `[EXP2][BEAR] BTC tranche ${accStatus.tranches}/4 deployed at $${fillPrice.toFixed(2)} | $${notional.toFixed(2)}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {
-      this.addEvent('danger', `Order failed for ${symbol}: ${err.message}`);
+      this.addEvent('danger', `BTC tranche order failed: ${err.message}`);
+    }
+  }
+
+  // ─── BTC DCA TRANCHE EXIT ────────────────────────────────
+
+  async exitAllBtcTranches(btcPrice, reason) {
+    const symbol = 'BTC/USD';
+    const pos = this.state.positions[symbol];
+    if (!pos || !pos.bearMode) {
+      clearTranches();
+      return;
+    }
+
+    try {
+      const closeOrder = await alpaca.closePosition(
+        this.config.apiKey, this.config.secretKey, this.config.mode, symbol
+      );
+      const exitPrice = closeOrder?.id
+        ? await getFillPrice(this.config.apiKey, this.config.secretKey, this.config.mode, closeOrder.id, btcPrice)
+        : btcPrice;
+
+      const exitCost = pos.notional * SPREAD_COST_PCT;
+      const totalCost = (pos.entryCost || 0) + exitCost;
+      const grossPnl = (exitPrice - pos.entryPrice) / pos.entryPrice * pos.notional;
+      const pnl = grossPnl - totalCost;
+      const isWin = pnl > 0;
+      if (isWin) this.state.wins++; else this.state.losses++;
+
+      const exitReason = reason === 'gateReopen' ? 'GATE REOPEN' : 'EMERGENCY STOP';
+      this.addEvent(isWin ? 'success' : 'danger',
+        `[EXP2][BEAR] ${exitReason}: BTC @ $${exitPrice.toFixed(2)} | Avg entry: $${pos.entryPrice.toFixed(2)} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`
+      );
+      this.recordTrade({
+        symbol, side: 'SELL', qty: pos.qty, price: exitPrice, notional: pos.notional,
+        time: new Date().toISOString(), pnl: parseFloat(pnl.toFixed(4)), reason: exitReason,
+      });
+
+      // Record to performance tracker
+      const pnlPct = (exitPrice - pos.entryPrice) / pos.entryPrice * 100;
+      recordPerfTrade({
+        bot: 'exp2',
+        coin: symbol,
+        entryPrice: pos.entryPrice,
+        exitPrice,
+        entryTime: pos.entryTime,
+        exitTime: new Date().toISOString(),
+        pnlPct: parseFloat(pnlPct.toFixed(2)),
+        pnlUsd: parseFloat(pnl.toFixed(2)),
+        exitReason: reason === 'gateReopen' ? 'gateReopen' : 'stopLoss',
+        regime: 'bear',
+        type: 'btc_dca_accumulation',
+      });
+
+      delete this.state.positions[symbol];
+      clearTranches();
+      saveState(this.state);
+    } catch (err) {
+      this.addEvent('danger', `BTC tranche exit failed: ${err.message}`);
     }
   }
 
@@ -537,6 +615,26 @@ class Experiment2Bot {
       this.recordTrade({
         symbol, side: 'SELL', qty: pos.qty, price: exitPrice, notional: pos.notional,
         time: new Date().toISOString(), pnl: parseFloat(pnl.toFixed(4)), reason,
+      });
+
+      // Record to performance tracker
+      const pnlPct = (exitPrice - pos.entryPrice) / pos.entryPrice * 100;
+      let perfExitReason = 'timeExit';
+      if (reason.includes('TAKE PROFIT')) perfExitReason = 'takeProfit';
+      else if (reason.includes('TRAILING STOP') || reason.includes('HARD STOP')) perfExitReason = 'stopLoss';
+      else if (reason.includes('TIME EXIT')) perfExitReason = 'timeExit';
+      recordPerfTrade({
+        bot: 'exp2',
+        coin: symbol,
+        entryPrice: pos.entryPrice,
+        exitPrice,
+        entryTime: pos.entryTime,
+        exitTime: new Date().toISOString(),
+        pnlPct: parseFloat(pnlPct.toFixed(2)),
+        pnlUsd: parseFloat(pnl.toFixed(2)),
+        exitReason: perfExitReason,
+        regime: pos.bearMode ? 'bear' : 'bull',
+        type: pos.bearType || 'momentum_breakout',
       });
 
       // Cooldown after stop-loss: skip 2 candles (2 x 4h = 8 hours)
@@ -602,6 +700,7 @@ class Experiment2Bot {
       events: this.state.events,
       lastBearSignal: this.state.lastBearSignal,
       cooldowns: this.state.cooldowns,
+      btcAccumulation: getBtcAccumulationStatus(),
     };
   }
 }
