@@ -378,28 +378,40 @@ class TradingBot {
 
     const signals = [];
 
+    // Batch fetch: get bars + prices for all symbols in 2 API calls instead of 2N
+    let allBars, allPrices;
+    try {
+      [allBars, allPrices] = await Promise.all([
+        alpaca.getCryptoBarsMulti(
+          this.config.apiKey, this.config.secretKey,
+          this.config.watchlist, '1Min', 30
+        ),
+        alpaca.getLatestCryptoPricesMulti(
+          this.config.apiKey, this.config.secretKey,
+          this.config.watchlist, this.streamHandle
+        ),
+      ]);
+    } catch (err) {
+      this.addEvent('danger', `Batch fetch failed: ${err.message}`);
+      return;
+    }
+
     for (const symbol of this.config.watchlist) {
       try {
-        // Fetch OHLCV bars (last 30 1-minute bars)
-        const bars = await alpaca.getCryptoBars(
-          this.config.apiKey, this.config.secretKey, symbol, '1Min', 30
-        );
+        const sym = symbol.includes('/') ? symbol : symbol.replace(/USD$/, '/USD');
+        const bars = allBars.get(sym) || [];
 
         const signal = evaluateSignal(symbol, bars, {
           rsiBuy: this.config.rsiBuy,
           rsiSell: this.config.rsiSell,
         });
 
-        // Always fetch live price — stream first, REST fallback
-        const livePrice = await alpaca.getLatestCryptoPrice(
-          this.config.apiKey, this.config.secretKey, symbol, this.streamHandle
-        );
+        const livePrice = allPrices.get(sym) || 0;
         if (livePrice > 0) {
-          signal.price = livePrice;  // Override stale bar close with live price
+          signal.price = livePrice;
         }
 
-        // Detect stale bars: Alpaca crypto bars typically lag ~90min;
-        // flag as stale only if >2 hours old (truly outdated data)
+        // Detect stale bars: flag as stale only if >2 hours old
         if (bars.length > 0) {
           const lastBarTime = new Date(bars[bars.length - 1].t).getTime();
           const barAgeMin = (Date.now() - lastBarTime) / 60000;

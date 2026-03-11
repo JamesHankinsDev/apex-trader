@@ -261,18 +261,30 @@ class Experiment2Bot {
 
     const signals = [];
 
+    // Batch fetch: get 4h bars + prices for all symbols in 2 API calls instead of 2N
+    let allBars, allPrices;
+    try {
+      [allBars, allPrices] = await Promise.all([
+        alpaca.getCryptoBarsMulti(
+          this.config.apiKey, this.config.secretKey,
+          this.config.watchlist, '4Hour', 60, EIGHTY_BARS_4H_MS
+        ),
+        alpaca.getLatestCryptoPricesMulti(
+          this.config.apiKey, this.config.secretKey,
+          this.config.watchlist, this.streamHandle
+        ),
+      ]);
+    } catch (err) {
+      this.addEvent('danger', `Batch fetch failed: ${err.message}`);
+      return;
+    }
+
     for (const symbol of this.config.watchlist) {
       try {
-        // Fetch 4-hour bars (need 50+ for SMA50, fetch 60 to be safe)
-        const bars = await alpaca.getCryptoBars(
-          this.config.apiKey, this.config.secretKey, symbol,
-          '4Hour', 60, EIGHTY_BARS_4H_MS
-        );
+        const sym = symbol.includes('/') ? symbol : symbol.replace(/USD$/, '/USD');
+        const bars = allBars.get(sym) || [];
 
-        // Get live price
-        const livePrice = await alpaca.getLatestCryptoPrice(
-          this.config.apiKey, this.config.secretKey, symbol, this.streamHandle
-        );
+        const livePrice = allPrices.get(sym) || 0;
         if (!livePrice || livePrice <= 0) continue;
 
         const signal = evaluate(symbol, bars, livePrice);

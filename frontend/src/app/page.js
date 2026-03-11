@@ -611,7 +611,7 @@ export default function Dashboard() {
               </span>
             )}
             <span style={{ color: "#666", marginLeft: "auto" }}>
-              {gate.btcPrice > 0 ? `BTC ${fmt$(gate.btcPrice)} / 50-SMA ${fmt$(gate.sma50)}` : "Loading BTC data..."}
+              {(regime?.btcPrice || gate.btcPrice) > 0 ? `BTC ${fmt$(regime?.btcPrice || gate.btcPrice)} / 50-SMA ${fmt$(regime?.sma50 || gate.sma50)}` : "Loading BTC data..."}
             </span>
           </div>
         );

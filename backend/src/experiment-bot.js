@@ -245,24 +245,35 @@ class ExperimentBot {
     this.state.lastScan = new Date().toISOString();
     const signals = [];
 
+    // Batch fetch: get hourly bars, minute bars, and prices in 3 API calls instead of 3N
+    let allHourlyBars, allMinuteBars, allPrices;
+    try {
+      [allHourlyBars, allMinuteBars, allPrices] = await Promise.all([
+        alpaca.getCryptoBarsMulti(
+          this.config.apiKey, this.config.secretKey,
+          this.config.watchlist, '1Hour', 24, TWENTY_FOUR_HOURS_MS
+        ),
+        alpaca.getCryptoBarsMulti(
+          this.config.apiKey, this.config.secretKey,
+          this.config.watchlist, '1Min', 10
+        ),
+        alpaca.getLatestCryptoPricesMulti(
+          this.config.apiKey, this.config.secretKey,
+          this.config.watchlist, this.streamHandle
+        ),
+      ]);
+    } catch (err) {
+      this.addEvent('danger', `Batch fetch failed: ${err.message}`);
+      return;
+    }
+
     for (const symbol of this.config.watchlist) {
       try {
-        // Fetch 24h of 1-hour bars for average calculation
-        const hourlyBars = await alpaca.getCryptoBars(
-          this.config.apiKey, this.config.secretKey, symbol,
-          '1Hour', 24, TWENTY_FOUR_HOURS_MS
-        );
+        const sym = symbol.includes('/') ? symbol : symbol.replace(/USD$/, '/USD');
+        const hourlyBars = allHourlyBars.get(sym) || [];
+        const minuteBars = allMinuteBars.get(sym) || [];
 
-        // Fetch recent 1-min bars for momentum/trend detection
-        const minuteBars = await alpaca.getCryptoBars(
-          this.config.apiKey, this.config.secretKey, symbol,
-          '1Min', 10
-        );
-
-        // Get live price — stream first, REST fallback
-        const livePrice = await alpaca.getLatestCryptoPrice(
-          this.config.apiKey, this.config.secretKey, symbol, this.streamHandle
-        );
+        const livePrice = allPrices.get(sym) || 0;
         if (!livePrice || livePrice <= 0) continue;
 
         const signal = evaluate(symbol, hourlyBars, livePrice, minuteBars, this.config.dipThreshold);

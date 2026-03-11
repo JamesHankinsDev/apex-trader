@@ -8,6 +8,7 @@ const experiment2Bot = require('./experiment2-bot');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
 const { getChannelData } = require('./bearStrategy');
 const { getPerformanceStats, getWeeklySnapshots } = require('./performance');
+const alpaca = require('./alpaca');
 
 const app = express();
 app.use(express.json());
@@ -21,32 +22,73 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', ts: new Date().toISOString() });
 });
 
+// ─── SHARED MARKET DATA (computed once, shared across all status endpoints) ──
+// Avoids 3x duplicate gate/regime/price calls when frontend polls all 3 bots.
+let sharedMarketData = null;
+let sharedMarketDataFetchedAt = 0;
+const SHARED_MARKET_TTL = 4000; // 4s — frontend polls every 5s
+
+async function getSharedMarketData() {
+  if (sharedMarketData && Date.now() - sharedMarketDataFetchedAt < SHARED_MARKET_TTL) {
+    return sharedMarketData;
+  }
+
+  // Pick the first available API key (market data is account-independent)
+  const apiKey = bot.config.apiKey || process.env.ALPACA_API_KEY
+    || experimentBot.config.apiKey || process.env.EXPERIMENT_1_ALPACA_API_KEY
+    || experiment2Bot.config.apiKey || process.env.EXPERIMENT_2_ALPACA_API_KEY;
+  const secretKey = bot.config.secretKey || process.env.ALPACA_SECRET_KEY
+    || experimentBot.config.secretKey || process.env.EXPERIMENT_1_ALPACA_SECRET_KEY
+    || experiment2Bot.config.secretKey || process.env.EXPERIMENT_2_ALPACA_SECRET_KEY;
+  const streamHandle = bot.streamHandle || experimentBot.streamHandle || experiment2Bot.streamHandle;
+
+  if (!apiKey || !secretKey) return null;
+
+  try {
+    const [gate, regime, liveBtc] = await Promise.all([
+      isBtcGateOpen(apiKey, secretKey, streamHandle),
+      getMarketRegime(apiKey, secretKey, streamHandle),
+      alpaca.getLatestCryptoPrice(apiKey, secretKey, 'BTC/USD', streamHandle),
+    ]);
+
+    let bearChannel = null;
+    if (regime.regime === 'bear') {
+      try {
+        const coin = (bot.config.watchlist || [])[0] || 'BTC/USD';
+        bearChannel = await getChannelData(coin, apiKey, secretKey);
+      } catch {
+        bearChannel = { support: null, resist: null, width: null };
+      }
+    }
+
+    sharedMarketData = { gate, regime, liveBtc, bearChannel };
+    sharedMarketDataFetchedAt = Date.now();
+    return sharedMarketData;
+  } catch {
+    return null;
+  }
+}
+
+function attachMarketData(status, market) {
+  if (!market) return;
+  const { gate, regime, liveBtc, bearChannel } = market;
+  status.btcGate = gate;
+  status.regime = {
+    current: regime.regime,
+    fearGreed: regime.fearGreed,
+    extremeFear: regime.extremeFear,
+    capitulation: regime.capitulation,
+    btcPrice: liveBtc || regime.btcPrice,
+    sma50: regime.sma50,
+  };
+  if (bearChannel) status.regime.bearChannel = bearChannel;
+}
+
 // ─── BOT STATUS ───────────────────────────────────────────────
 app.get('/api/status', async (req, res) => {
   const status = bot.getStatus();
   try {
-    const apiKey = bot.config.apiKey || process.env.ALPACA_API_KEY;
-    const secretKey = bot.config.secretKey || process.env.ALPACA_SECRET_KEY;
-    if (apiKey && secretKey) {
-      status.btcGate = await isBtcGateOpen(apiKey, secretKey, bot.streamHandle);
-      const regime = await getMarketRegime(apiKey, secretKey, bot.streamHandle);
-      status.regime = {
-        current: regime.regime,
-        fearGreed: regime.fearGreed,
-        extremeFear: regime.extremeFear,
-        capitulation: regime.capitulation,
-        btcPrice: regime.btcPrice,
-        sma50: regime.sma50,
-      };
-      if (regime.regime === 'bear') {
-        try {
-          const coin = (bot.config.watchlist || [])[0] || 'BTC/USD';
-          status.regime.bearChannel = await getChannelData(coin, apiKey, secretKey);
-        } catch {
-          status.regime.bearChannel = { support: null, resist: null, width: null };
-        }
-      }
-    }
+    attachMarketData(status, await getSharedMarketData());
   } catch {}
   res.json(status);
 });
@@ -87,8 +129,6 @@ app.post('/api/trade', async (req, res) => {
   if (side === 'sell') {
     const pos = bot.state?.positions?.[symbol];
     if (!pos) return res.status(400).json({ ok: false, msg: 'No open position for ' + symbol });
-    // Fetch current market price instead of using stale entry price
-    const alpaca = require('./alpaca');
     const currentPrice = await alpaca.getLatestCryptoPrice(
       bot.config.apiKey, bot.config.secretKey, symbol, bot.streamHandle
     );
@@ -103,28 +143,7 @@ app.post('/api/trade', async (req, res) => {
 app.get('/api/experiment/status', async (req, res) => {
   const status = experimentBot.getStatus();
   try {
-    const apiKey = experimentBot.config.apiKey || process.env.EXPERIMENT_1_ALPACA_API_KEY;
-    const secretKey = experimentBot.config.secretKey || process.env.EXPERIMENT_1_ALPACA_SECRET_KEY;
-    if (apiKey && secretKey) {
-      status.btcGate = await isBtcGateOpen(apiKey, secretKey, experimentBot.streamHandle);
-      const regime = await getMarketRegime(apiKey, secretKey, experimentBot.streamHandle);
-      status.regime = {
-        current: regime.regime,
-        fearGreed: regime.fearGreed,
-        extremeFear: regime.extremeFear,
-        capitulation: regime.capitulation,
-        btcPrice: regime.btcPrice,
-        sma50: regime.sma50,
-      };
-      if (regime.regime === 'bear') {
-        try {
-          const coin = (experimentBot.config.watchlist || [])[0] || 'BTC/USD';
-          status.regime.bearChannel = await getChannelData(coin, apiKey, secretKey);
-        } catch {
-          status.regime.bearChannel = { support: null, resist: null, width: null };
-        }
-      }
-    }
+    attachMarketData(status, await getSharedMarketData());
   } catch {}
   res.json(status);
 });
@@ -145,8 +164,7 @@ app.post('/api/experiment/trade', async (req, res) => {
   if (side === 'sell') {
     const pos = experimentBot.state?.positions?.[symbol];
     if (!pos) return res.status(400).json({ ok: false, msg: 'No open position for ' + symbol });
-    const alpacaApi = require('./alpaca');
-    const currentPrice = await alpacaApi.getLatestCryptoPrice(
+    const currentPrice = await alpaca.getLatestCryptoPrice(
       experimentBot.config.apiKey, experimentBot.config.secretKey, symbol, experimentBot.streamHandle
     );
     if (!currentPrice) return res.status(500).json({ ok: false, msg: 'Could not fetch current price' });
@@ -159,28 +177,7 @@ app.post('/api/experiment/trade', async (req, res) => {
 app.get('/api/bot2/status', async (req, res) => {
   const status = experiment2Bot.getStatus();
   try {
-    const apiKey = experiment2Bot.config.apiKey || process.env.EXPERIMENT_2_ALPACA_API_KEY;
-    const secretKey = experiment2Bot.config.secretKey || process.env.EXPERIMENT_2_ALPACA_SECRET_KEY;
-    if (apiKey && secretKey) {
-      status.btcGate = await isBtcGateOpen(apiKey, secretKey, experiment2Bot.streamHandle);
-      const regime = await getMarketRegime(apiKey, secretKey, experiment2Bot.streamHandle);
-      status.regime = {
-        current: regime.regime,
-        fearGreed: regime.fearGreed,
-        extremeFear: regime.extremeFear,
-        capitulation: regime.capitulation,
-        btcPrice: regime.btcPrice,
-        sma50: regime.sma50,
-      };
-      if (regime.regime === 'bear') {
-        try {
-          const coin = (experiment2Bot.config.watchlist || [])[0] || 'BTC/USD';
-          status.regime.bearChannel = await getChannelData(coin, apiKey, secretKey);
-        } catch {
-          status.regime.bearChannel = { support: null, resist: null, width: null };
-        }
-      }
-    }
+    attachMarketData(status, await getSharedMarketData());
   } catch {}
   res.json(status);
 });
