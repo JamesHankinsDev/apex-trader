@@ -55,8 +55,13 @@ async function getSharedMarketData() {
     let bearChannels = null;
     if (regime.regime === 'bear') {
       try {
-        const watchlist = bot.config.watchlist || experimentBot.config.watchlist
-          || experiment2Bot.config.watchlist || ['BTC/USD'];
+        // Use union of all bots' bear watchlists for channel data
+        const allBearCoins = new Set([
+          ...(bot.config.bearWatchlist || bot.config.watchlist || []),
+          ...(experimentBot.config.bearWatchlist || experimentBot.config.watchlist || []),
+          ...(experiment2Bot.config.bearWatchlist || experiment2Bot.config.watchlist || []),
+        ]);
+        const watchlist = [...allBearCoins].length > 0 ? [...allBearCoins] : ['BTC/USD'];
         const channelResults = await Promise.all(
           watchlist.map(coin => getChannelData(coin, apiKey, secretKey).catch(() => ({ support: null, resist: null, width: null })))
         );

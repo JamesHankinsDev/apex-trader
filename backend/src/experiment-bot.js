@@ -53,6 +53,9 @@ class ExperimentBot {
       secretKey: process.env.EXPERIMENT_1_ALPACA_SECRET_KEY || '',
       mode: 'paper', // Always paper for experiments
       watchlist: (process.env.EXPERIMENT_1_WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD').split(','),
+      bearWatchlist: process.env.EXPERIMENT_1_WATCHLIST_BEAR
+        ? process.env.EXPERIMENT_1_WATCHLIST_BEAR.split(',')
+        : null,
       positionSize: parseFloat(process.env.EXPERIMENT_1_POSITION_SIZE) || 0.33,
       dipThreshold: parseFloat(process.env.EXPERIMENT_1_DIP_THRESHOLD) || 0.015,
       maxPositions: parseInt(process.env.EXPERIMENT_1_MAX_POSITIONS) || 2,
@@ -243,6 +246,18 @@ class ExperimentBot {
   async runScan() {
     if (!this.running) return;
     this.state.lastScan = new Date().toISOString();
+
+    // Determine regime first to select the right watchlist (cached, essentially free)
+    const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+    const isBear = !gate.open;
+    const entryWatchlist = isBear && this.config.bearWatchlist
+      ? this.config.bearWatchlist : this.config.watchlist;
+
+    // Merge with open position symbols so exits are always monitored
+    const openSymbols = Object.keys(this.state.positions);
+    const scanWatchlist = [...new Set([...entryWatchlist, ...openSymbols])];
+    this.state.activeWatchlist = entryWatchlist;
+
     const signals = [];
 
     // Batch fetch: get hourly bars, minute bars, and prices in 3 API calls instead of 3N
@@ -251,15 +266,15 @@ class ExperimentBot {
       [allHourlyBars, allMinuteBars, allPrices] = await Promise.all([
         alpaca.getCryptoBarsMulti(
           this.config.apiKey, this.config.secretKey,
-          this.config.watchlist, '1Hour', 24, TWENTY_FOUR_HOURS_MS
+          scanWatchlist, '1Hour', 24, TWENTY_FOUR_HOURS_MS
         ),
         alpaca.getCryptoBarsMulti(
           this.config.apiKey, this.config.secretKey,
-          this.config.watchlist, '1Min', 10
+          scanWatchlist, '1Min', 10
         ),
         alpaca.getLatestCryptoPricesMulti(
           this.config.apiKey, this.config.secretKey,
-          this.config.watchlist, this.streamHandle
+          scanWatchlist, this.streamHandle
         ),
       ]);
     } catch (err) {
@@ -267,7 +282,7 @@ class ExperimentBot {
       return;
     }
 
-    for (const symbol of this.config.watchlist) {
+    for (const symbol of scanWatchlist) {
       try {
         const sym = symbol.includes('/') ? symbol : symbol.replace(/USD$/, '/USD');
         const hourlyBars = allHourlyBars.get(sym) || [];
@@ -339,17 +354,18 @@ class ExperimentBot {
 
     this.state.signals = signals;
 
-    // BTC macro gate: skip entries if BTC is below 50-day SMA
-    const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+    // BTC macro gate: skip entries if BTC is below 50-day SMA (reuse pre-fetched gate)
     if (!gate.open) {
       this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
 
-      // Bear mode: try dead cat bounce entries
+      // Bear mode: try dead cat bounce entries (only on bear watchlist coins)
       const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
       if (regime.regime === 'bear') {
+        const entrySet = new Set(entryWatchlist);
         let openCount = Object.keys(this.state.positions).length;
         for (const sig of signals) {
           if (openCount >= this.config.maxPositions) break;
+          if (!entrySet.has(sig.symbol)) continue;
           if (this.state.positions[sig.symbol]) continue;
 
           const bearSignal = await evaluateBearEntry1(sig, regime, sig.symbol);
@@ -360,10 +376,12 @@ class ExperimentBot {
         }
       }
     } else {
-      // Bull mode — buy dips (unchanged)
+      // Bull mode — buy dips (only on bull watchlist coins)
+      const entrySet = new Set(entryWatchlist);
       let openCount = Object.keys(this.state.positions).length;
       for (const sig of signals) {
         if (openCount >= this.config.maxPositions) break;
+        if (!entrySet.has(sig.symbol)) continue;
         if (sig.signal !== 'buy') continue;
         if (this.state.positions[sig.symbol]) continue;
 
@@ -560,6 +578,8 @@ class ExperimentBot {
         scanInterval: this.config.scanInterval,
         maxHoldHours: this.config.maxHoldHours,
         watchlist: this.config.watchlist,
+        bearWatchlist: this.config.bearWatchlist || this.config.watchlist,
+        activeWatchlist: this.state.activeWatchlist || this.config.watchlist,
       },
       portfolioValue: this.state.portfolioValue,
       cashBalance: this.state.cashBalance,

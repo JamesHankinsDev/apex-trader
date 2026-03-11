@@ -54,6 +54,9 @@ class Experiment2Bot {
       secretKey: process.env.EXPERIMENT_2_ALPACA_SECRET_KEY || '',
       mode: 'paper',
       watchlist: (process.env.EXPERIMENT_2_WATCHLIST || 'AVAX/USD,LINK/USD,AAVE/USD,DOT/USD,UNI/USD').split(','),
+      bearWatchlist: process.env.EXPERIMENT_2_WATCHLIST_BEAR
+        ? process.env.EXPERIMENT_2_WATCHLIST_BEAR.split(',')
+        : null,
       positionSize: 0.95,        // 95% of available balance
       maxPositions: 1,           // Only one position at a time
       trailingStopPct: 0.15,     // 15% trailing stop
@@ -259,6 +262,17 @@ class Experiment2Bot {
       return;
     }
 
+    // Determine regime first to select the right watchlist (cached, essentially free)
+    const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+    const isBear = !gate.open;
+    const entryWatchlist = isBear && this.config.bearWatchlist
+      ? this.config.bearWatchlist : this.config.watchlist;
+
+    // Merge with open position symbols so exits are always monitored
+    const openSymbols = Object.keys(this.state.positions);
+    const scanWatchlist = [...new Set([...entryWatchlist, ...openSymbols])];
+    this.state.activeWatchlist = entryWatchlist;
+
     const signals = [];
 
     // Batch fetch: get 4h bars + prices for all symbols in 2 API calls instead of 2N
@@ -267,11 +281,11 @@ class Experiment2Bot {
       [allBars, allPrices] = await Promise.all([
         alpaca.getCryptoBarsMulti(
           this.config.apiKey, this.config.secretKey,
-          this.config.watchlist, '4Hour', 60, EIGHTY_BARS_4H_MS
+          scanWatchlist, '4Hour', 60, EIGHTY_BARS_4H_MS
         ),
         alpaca.getLatestCryptoPricesMulti(
           this.config.apiKey, this.config.secretKey,
-          this.config.watchlist, this.streamHandle
+          scanWatchlist, this.streamHandle
         ),
       ]);
     } catch (err) {
@@ -279,7 +293,7 @@ class Experiment2Bot {
       return;
     }
 
-    for (const symbol of this.config.watchlist) {
+    for (const symbol of scanWatchlist) {
       try {
         const sym = symbol.includes('/') ? symbol : symbol.replace(/USD$/, '/USD');
         const bars = allBars.get(sym) || [];
@@ -348,12 +362,11 @@ class Experiment2Bot {
 
     this.state.signals = signals;
 
-    // BTC macro gate: skip entries if BTC is below 50-day SMA
-    const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+    // BTC macro gate: skip entries if BTC is below 50-day SMA (reuse pre-fetched gate)
     if (!gate.open) {
       this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
 
-      // Bear mode: BTC DCA accumulation (ignore altcoins, accumulate BTC in tranches)
+      // Bear mode: BTC DCA accumulation (only on bear watchlist coins)
       const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
       if (regime.regime === 'bear') {
         // Get current BTC price
@@ -391,10 +404,12 @@ class Experiment2Bot {
         }
       }
 
-      // Bull mode — entry: only 1 position at a time (unchanged)
+      // Bull mode — entry: only on bull watchlist coins, 1 position at a time
+      const entrySet = new Set(entryWatchlist);
       const openCount = Object.keys(this.state.positions).length;
       if (openCount < this.config.maxPositions) {
         for (const sig of signals) {
+          if (!entrySet.has(sig.symbol)) continue;
           if (sig.signal !== 'buy') continue;
           if (this.state.positions[sig.symbol]) continue;
 
@@ -694,6 +709,8 @@ class Experiment2Bot {
         minBalance: this.config.minBalance,
         cooldownCandles: this.config.cooldownCandles,
         watchlist: this.config.watchlist,
+        bearWatchlist: this.config.bearWatchlist || this.config.watchlist,
+        activeWatchlist: this.state.activeWatchlist || this.config.watchlist,
       },
       portfolioValue: this.state.portfolioValue,
       cashBalance: this.state.cashBalance,

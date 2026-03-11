@@ -83,6 +83,9 @@ class TradingBot {
       rsiSell: parseInt(process.env.RSI_SELL_ABOVE) || 70,
       scanInterval: parseInt(process.env.SCAN_INTERVAL_SECONDS) || 60,
       watchlist: (process.env.WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD,DOGE/USD,AVAX/USD').split(','),
+      bearWatchlist: process.env.WATCHLIST_BEAR
+        ? process.env.WATCHLIST_BEAR.split(',')
+        : null, // falls back to watchlist if not set
       maxPositions: MAX_CONCURRENT_POSITIONS,
       dailyLossLimit: DAILY_LOSS_LIMIT_PCT,
       maxHoldHours: MAX_HOLD_HOURS,
@@ -376,6 +379,17 @@ class TradingBot {
     if (!this.running) return;
     this.state.lastScan = new Date().toISOString();
 
+    // Determine regime first to select the right watchlist (cached, essentially free)
+    const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+    const isBear = !gate.open;
+    const entryWatchlist = isBear && this.config.bearWatchlist
+      ? this.config.bearWatchlist : this.config.watchlist;
+
+    // Merge with open position symbols so exits are always monitored
+    const openSymbols = Object.keys(this.state.positions);
+    const scanWatchlist = [...new Set([...entryWatchlist, ...openSymbols])];
+    this.state.activeWatchlist = entryWatchlist;
+
     const signals = [];
 
     // Batch fetch: get bars + prices for all symbols in 2 API calls instead of 2N
@@ -384,11 +398,11 @@ class TradingBot {
       [allBars, allPrices] = await Promise.all([
         alpaca.getCryptoBarsMulti(
           this.config.apiKey, this.config.secretKey,
-          this.config.watchlist, '1Min', 30
+          scanWatchlist, '1Min', 30
         ),
         alpaca.getLatestCryptoPricesMulti(
           this.config.apiKey, this.config.secretKey,
-          this.config.watchlist, this.streamHandle
+          scanWatchlist, this.streamHandle
         ),
       ]);
     } catch (err) {
@@ -396,7 +410,7 @@ class TradingBot {
       return;
     }
 
-    for (const symbol of this.config.watchlist) {
+    for (const symbol of scanWatchlist) {
       try {
         const sym = symbol.includes('/') ? symbol : symbol.replace(/USD$/, '/USD');
         const bars = allBars.get(sym) || [];
@@ -453,17 +467,18 @@ class TradingBot {
     if (dailyLossPct <= -this.config.dailyLossLimit) {
       this.addEvent('danger', `Daily loss limit hit (${(dailyLossPct * 100).toFixed(2)}%) — halting new entries`);
     } else {
-      // BTC macro gate: skip entries if BTC is below 50-day SMA
-      const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+      // BTC macro gate: skip entries if BTC is below 50-day SMA (reuse pre-fetched gate)
       if (!gate.open) {
         this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
 
-        // Bear mode: try channel range trade entries
+        // Bear mode: try channel range trade entries (only on bear watchlist coins)
         const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
         if (regime.regime === 'bear') {
+          const entrySet = new Set(entryWatchlist);
           let openCount = Object.keys(this.state.positions).length;
           for (const candidate of signals) {
             if (openCount >= this.config.maxPositions) break;
+            if (!entrySet.has(candidate.symbol)) continue;
             if (candidate.price <= 0) continue;
             if (this.state.positions[candidate.symbol]) continue;
             if (candidate.stale) continue;
@@ -486,12 +501,14 @@ class TradingBot {
           }
         }
       } else {
-      // Bull mode — all existing entry logic continues unchanged below
+      // Bull mode — entry logic (only on bull watchlist coins)
+      const bullEntrySet = new Set(entryWatchlist);
       let openCount = Object.keys(this.state.positions).length;
       for (const candidate of signals) {
         if (openCount >= this.config.maxPositions) {
           break;
         }
+        if (!bullEntrySet.has(candidate.symbol)) continue;
         if (candidate.score < this.config.entryScoreThreshold || candidate.price <= 0) {
           continue;
         }
@@ -897,6 +914,8 @@ class TradingBot {
         rsiSell: this.config.rsiSell,
         scanInterval: this.config.scanInterval,
         watchlist: this.config.watchlist,
+        bearWatchlist: this.config.bearWatchlist || this.config.watchlist,
+        activeWatchlist: this.state.activeWatchlist || this.config.watchlist,
         maxPositions: this.config.maxPositions,
         dailyLossLimit: this.config.dailyLossLimit,
         maxHoldHours: this.config.maxHoldHours,
