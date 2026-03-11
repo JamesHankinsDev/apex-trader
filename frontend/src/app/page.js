@@ -764,11 +764,10 @@ export default function Dashboard() {
                   prefix: s.price != null ? "$" : "",
                 },
                 {
-                  l: "SUPPORT",
-                  v: bc?.support ? bc.support.toFixed(2) : "\u2014",
-                  prefix: bc?.support ? "$" : "",
-                  color: priceColor,
-                  tag: priceTag,
+                  l: "SUP / RES",
+                  v: `${bc?.support ? "$" + bc.support.toFixed(2) : "\u2014"} / ${bc?.resist ? "$" + bc.resist.toFixed(2) : "\u2014"}`,
+                  color: supportBroken ? "var(--red)" : aboveResistance ? "var(--yellow, #f0ad4e)" : priceNearSupport ? "var(--green)" : "var(--dim)",
+                  tag: supportBroken ? " BROKEN" : aboveResistance ? " BREAKOUT" : priceNearSupport ? " \u2713" : "",
                 },
                 {
                   l: "RSI (1h)",
@@ -1386,7 +1385,7 @@ export default function Dashboard() {
                         <div className={styles.metrics}>
                           {[
                             { l: "PRICE", v: `$${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}` },
-                            { l: "SUPPORT", v: bc?.support ? `$${bc.support.toFixed(2)}` : "\u2014", color: priceColor, tag: priceTag },
+                            { l: "SUP / RES", v: `${bc?.support ? "$" + bc.support.toFixed(2) : "\u2014"} / ${bc?.resist ? "$" + bc.resist.toFixed(2) : "\u2014"}`, color: supportBroken ? "var(--red)" : aboveResistance ? "var(--yellow, #f0ad4e)" : priceNearSupport ? "var(--green)" : "var(--dim)", tag: supportBroken ? " BROKEN" : aboveResistance ? " BREAKOUT" : priceNearSupport ? " \u2713" : "" },
                             { l: "RSI (1h)", v: bearRsi != null ? Number(bearRsi).toFixed(1) : "\u2014", color: rsiOk ? "var(--green)" : "var(--dim)", tag: rsiOk ? " \u2713" : "" },
                             { l: "VOL (1h)", v: `\u00D7${Number(bearVol).toFixed(2)}`, color: volOk ? "var(--green)" : "var(--dim)", tag: volOk ? " \u2713" : "" },
                             { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: channelColor, tag: bc?.width ? channelTag : "" },
@@ -1731,7 +1730,7 @@ export default function Dashboard() {
                         <div className={styles.metrics}>
                           {[
                             { l: "PRICE", v: `$${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}` },
-                            { l: "SUPPORT", v: bc?.support ? `$${bc.support.toFixed(2)}` : "\u2014", color: priceColor, tag: priceTag },
+                            { l: "SUP / RES", v: `${bc?.support ? "$" + bc.support.toFixed(2) : "\u2014"} / ${bc?.resist ? "$" + bc.resist.toFixed(2) : "\u2014"}`, color: supportBroken ? "var(--red)" : aboveResistance ? "var(--yellow, #f0ad4e)" : priceNearSupport ? "var(--green)" : "var(--dim)", tag: supportBroken ? " BROKEN" : aboveResistance ? " BREAKOUT" : priceNearSupport ? " \u2713" : "" },
                             { l: "RSI (1h)", v: bearRsi != null ? Number(bearRsi).toFixed(1) : "\u2014", color: rsiOk ? "var(--green)" : "var(--dim)", tag: rsiOk ? " \u2713" : "" },
                             { l: "VOL (1h)", v: `\u00D7${Number(bearVol).toFixed(2)}`, color: volOk ? "var(--green)" : "var(--dim)", tag: volOk ? " \u2713" : "" },
                             { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: channelColor, tag: bc?.width ? channelTag : "" },
