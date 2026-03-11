@@ -397,9 +397,14 @@ export default function Dashboard() {
                 | Fear & Greed: {fg.value} ({fg.label})
               </span>
             )}
-            {regime?.capitulation && (
+            {!isBull && regime?.current === "bear" && (
               <span style={{ color: "#ff3355", fontWeight: 700 }}>
-                {"\u26A1"} Capitulation Watch
+                {"\u26A1"} Range Trading Active
+              </span>
+            )}
+            {!isBull && regime?.bearChannel?.support && (
+              <span style={{ color: "#ff6680", fontSize: 11 }}>
+                | Bear Channel: {fmt$(regime.bearChannel.support)} → {fmt$(regime.bearChannel.resist)} | Width: {regime.bearChannel.width}%
               </span>
             )}
             <span style={{ color: "#666", marginLeft: "auto" }}>
@@ -671,7 +676,7 @@ export default function Dashboard() {
           {/* Bear signal indicator */}
           {status?.regime?.current === "bear" && status?.lastBearSignal && (
             <div style={{ padding: "8px 12px", margin: "6px 0", background: "rgba(255,51,85,0.08)", border: "1px solid rgba(255,51,85,0.2)", borderRadius: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
-              Last Bear Signal: {status.lastBearSignal.coin?.replace("/USD", "")} | RSI: {status.lastBearSignal.rsi} | Vol: {status.lastBearSignal.volMultiple}x | {fmtTime(status.lastBearSignal.time)}
+              Last Range Trade: {status.lastBearSignal.coin?.replace("/USD", "")} | Entry: {fmt$(status.lastBearSignal.entryPrice)} | TP: {fmt$(status.lastBearSignal.tpPrice)} | {fmtTime(status.lastBearSignal.time)}
             </div>
           )}
         </div>
@@ -1143,7 +1148,7 @@ export default function Dashboard() {
               {/* Bear signal indicator */}
               {es?.regime?.current === "bear" && es?.lastBearSignal && (
                 <div style={{ padding: "8px 12px", margin: "6px 0", background: "rgba(255,51,85,0.08)", border: "1px solid rgba(255,51,85,0.2)", borderRadius: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
-                  Last Bear Signal: {es.lastBearSignal.coin?.replace("/USD", "")} | RSI: {es.lastBearSignal.rsi} | Vol: {es.lastBearSignal.volMultiple}x | {fmtTime(es.lastBearSignal.time)}
+                  Last Range Trade: {es.lastBearSignal.coin?.replace("/USD", "")} | Entry: {fmt$(es.lastBearSignal.entryPrice)} | TP: {fmt$(es.lastBearSignal.tpPrice)} | {fmtTime(es.lastBearSignal.time)}
                 </div>
               )}
             </div>
@@ -1362,7 +1367,7 @@ export default function Dashboard() {
               {/* Bear signal indicator */}
               {e2?.regime?.current === "bear" && e2?.lastBearSignal && (
                 <div style={{ padding: "8px 12px", margin: "6px 0", background: "rgba(255,51,85,0.08)", border: "1px solid rgba(255,51,85,0.2)", borderRadius: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
-                  Last Bear Signal: {e2.lastBearSignal.coin?.replace("/USD", "")} | RSI: {e2.lastBearSignal.rsi} | Vol: {e2.lastBearSignal.volMultiple}x | {fmtTime(e2.lastBearSignal.time)}
+                  Last Range Trade: {e2.lastBearSignal.coin?.replace("/USD", "")} | Entry: {fmt$(e2.lastBearSignal.entryPrice)} | TP: {fmt$(e2.lastBearSignal.tpPrice)} | {fmtTime(e2.lastBearSignal.time)}
                 </div>
               )}
             </div>

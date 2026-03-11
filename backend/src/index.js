@@ -6,6 +6,7 @@ const bot = require('./bot');
 const experimentBot = require('./experiment-bot');
 const experiment2Bot = require('./experiment2-bot');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
+const { getChannelData } = require('./bearStrategy');
 
 const app = express();
 app.use(express.json());
@@ -36,6 +37,14 @@ app.get('/api/status', async (req, res) => {
         btcPrice: regime.btcPrice,
         sma50: regime.sma50,
       };
+      if (regime.regime === 'bear') {
+        try {
+          const coin = (bot.config.watchlist || [])[0] || 'BTC/USD';
+          status.regime.bearChannel = await getChannelData(coin, apiKey, secretKey);
+        } catch {
+          status.regime.bearChannel = { support: null, resist: null, width: null };
+        }
+      }
     }
   } catch {}
   res.json(status);
@@ -106,6 +115,14 @@ app.get('/api/experiment/status', async (req, res) => {
         btcPrice: regime.btcPrice,
         sma50: regime.sma50,
       };
+      if (regime.regime === 'bear') {
+        try {
+          const coin = (experimentBot.config.watchlist || [])[0] || 'BTC/USD';
+          status.regime.bearChannel = await getChannelData(coin, apiKey, secretKey);
+        } catch {
+          status.regime.bearChannel = { support: null, resist: null, width: null };
+        }
+      }
     }
   } catch {}
   res.json(status);
@@ -154,6 +171,14 @@ app.get('/api/bot2/status', async (req, res) => {
         btcPrice: regime.btcPrice,
         sma50: regime.sma50,
       };
+      if (regime.regime === 'bear') {
+        try {
+          const coin = (experiment2Bot.config.watchlist || [])[0] || 'BTC/USD';
+          status.regime.bearChannel = await getChannelData(coin, apiKey, secretKey);
+        } catch {
+          status.regime.bearChannel = { support: null, resist: null, width: null };
+        }
+      }
     }
   } catch {}
   res.json(status);

@@ -6,7 +6,7 @@ const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
 const benchmark = require('./benchmark');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
-const { evaluateBearEntry } = require('./bearStrategy');
+const { evaluateBearEntry, setBearCooldown } = require('./bearStrategy');
 
 // Persistent state file (survives restarts)
 const STATE_FILE = path.join(__dirname, '..', '.bot-state.json');
@@ -445,7 +445,7 @@ class TradingBot {
       if (!gate.open) {
         this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
 
-        // Bear mode: try capitulation recovery entries
+        // Bear mode: try channel range trade entries
         const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
         if (regime.regime === 'bear') {
           let openCount = Object.keys(this.state.positions).length;
@@ -455,8 +455,18 @@ class TradingBot {
             if (this.state.positions[candidate.symbol]) continue;
             if (candidate.stale) continue;
 
-            const bearSignal = await evaluateBearEntry(candidate, regime);
+            const bearSignal = await evaluateBearEntry(candidate, regime, candidate.symbol, {
+              apiKey: this.config.apiKey,
+              secretKey: this.config.secretKey,
+            });
             if (bearSignal) {
+              // Momentum bot: require green candle confirmation
+              const lastBar = candidate;
+              if (lastBar.close <= lastBar.open) {
+                this.addEvent('info', `[MAIN][BEAR] Skipping ${candidate.symbol} — candle not green`);
+                continue;
+              }
+              this.addEvent('info', '[MAIN][BEAR] Range entry confirmed with green candle');
               await this.executeBearEntry(bearSignal, candidate);
               openCount++;
             }
@@ -615,20 +625,26 @@ class TradingBot {
         notional,
         entryCost,
         entryTime: new Date().toISOString(),
-        stopPrice: fillPrice * (1 - bearSignal.stopLoss),
-        targetPrice: fillPrice * (1 + bearSignal.takeProfit),
+        stopPrice: bearSignal.stopLossPrice,
+        targetPrice: bearSignal.takeProfitPrice,
         bearMode: true,
       };
 
       this.state.lastBearSignal = {
         coin: symbol,
-        rsi: signal.rsi14,
-        volMultiple: parseFloat((signal.volume / signal.avgVolume20).toFixed(1)),
+        type: 'bear_range_trade',
+        entryPrice: fillPrice,
+        tpPrice: bearSignal.takeProfitPrice,
+        channelSupport: bearSignal.channelSupport,
+        channelResist: bearSignal.channelResist,
+        channelWidth: bearSignal.channelWidth,
+        rsi: bearSignal.rsi,
+        volMultiple: bearSignal.volMultiple,
         time: new Date().toISOString(),
       };
 
       this.addEvent('success',
-        `[MAIN][BEAR] Capitulation entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)}`
+        `[MAIN][BEAR] Range entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | TP $${bearSignal.takeProfitPrice.toFixed(2)} SL $${bearSignal.stopLossPrice.toFixed(2)}`
       );
 
       this.recordTrade({
@@ -677,6 +693,10 @@ class TradingBot {
     if (shouldStop || shouldTakeProfit) {
       const reason = shouldTakeProfit ? 'TAKE PROFIT' : 'STOP LOSS';
       await this.executeExit(symbol, currentPrice, reason);
+      // Bear mode: set cooldown on stop loss (channel broke), not on take profit
+      if (pos.bearMode && shouldStop && !shouldTakeProfit) {
+        setBearCooldown(symbol);
+      }
     }
   }
 

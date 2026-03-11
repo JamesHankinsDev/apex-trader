@@ -6,7 +6,7 @@ const alpaca = require('./alpaca');
 const { evaluate } = require('./breakout-strategy');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
-const { evaluateBearEntry } = require('./bearStrategy');
+const { evaluateBearEntry, setBearCooldown } = require('./bearStrategy');
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment2-state.json');
 const SPREAD_COST_PCT = 0.0015;
@@ -296,8 +296,8 @@ class Experiment2Bot {
         if (pos) {
           pos.livePrice = livePrice;
 
-          // Update high water mark and trailing stop
-          if (livePrice > (pos.highWaterMark || pos.entryPrice)) {
+          // Update high water mark and trailing stop (bull mode only)
+          if (!pos.bearMode && livePrice > (pos.highWaterMark || pos.entryPrice)) {
             pos.highWaterMark = livePrice;
             pos.trailingStop = livePrice * (1 - this.config.trailingStopPct);
           }
@@ -305,24 +305,35 @@ class Experiment2Bot {
           // Take profit
           if (livePrice >= pos.takeProfit) {
             await this.executeExit(symbol, livePrice, `TAKE PROFIT ($${livePrice.toFixed(2)} >= $${pos.takeProfit.toFixed(2)})`);
+            // No cooldown on take profit for bear positions
             continue;
           }
 
-          // Trailing stop
+          // Bear mode: exhaustion early exit — use breakout strategy's sell signal
+          if (pos.bearMode && signal.signal === 'sell') {
+            this.addEvent('info', `[EXP2][BEAR] Early exit — exhaustion at $${livePrice.toFixed(2)}`);
+            await this.executeExit(symbol, livePrice, `BEAR EXHAUSTION ($${livePrice.toFixed(2)})`);
+            // No cooldown on exhaustion exits
+            continue;
+          }
+
+          // Trailing stop (bull mode) / Hard stop (bear mode uses hardStop = stopLossPrice)
           if (livePrice <= pos.trailingStop) {
             await this.executeExit(symbol, livePrice, `TRAILING STOP ($${livePrice.toFixed(2)} <= $${pos.trailingStop.toFixed(2)})`, true);
+            if (pos.bearMode) setBearCooldown(symbol);
             continue;
           }
 
           // Hard stop loss
           if (livePrice <= pos.hardStop) {
             await this.executeExit(symbol, livePrice, `HARD STOP ($${livePrice.toFixed(2)} <= $${pos.hardStop.toFixed(2)})`, true);
+            if (pos.bearMode) setBearCooldown(symbol);
             continue;
           }
 
-          // Time exit (72 hours bull, 24 hours bear)
+          // Time exit (48 hours bear, 72 hours bull)
           const holdHours = (Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60);
-          const maxHold = pos.bearMode ? 24 : this.config.maxHoldHours;
+          const maxHold = pos.bearMode ? 48 : this.config.maxHoldHours;
           if (holdHours >= maxHold) {
             await this.executeExit(symbol, livePrice, `TIME EXIT (${Math.round(holdHours)}h)`);
             continue;
@@ -340,7 +351,7 @@ class Experiment2Bot {
     if (!gate.open) {
       this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
 
-      // Bear mode: try capitulation recovery entries
+      // Bear mode: try channel range trade entries
       const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
       if (regime.regime === 'bear') {
         const openCount = Object.keys(this.state.positions).length;
@@ -348,8 +359,12 @@ class Experiment2Bot {
           for (const sig of signals) {
             if (this.state.positions[sig.symbol]) continue;
 
-            const bearSignal = await evaluateBearEntry(sig, regime);
+            const bearSignal = await evaluateBearEntry(sig, regime, sig.symbol, {
+              apiKey: this.config.apiKey,
+              secretKey: this.config.secretKey,
+            });
             if (bearSignal) {
+              this.addEvent('info', '[EXP2][BEAR] Range entry — hybrid confirmation');
               await this.executeBearEntry(bearSignal, sig);
               break; // Only one entry per scan
             }
@@ -464,29 +479,32 @@ class Experiment2Bot {
       );
       const entryCost = notional * SPREAD_COST_PCT;
       const qty = (notional - entryCost) / fillPrice;
-      const trailingStop = fillPrice * (1 - bearSignal.stopLoss);
-      const hardStop = fillPrice * (1 - bearSignal.stopLoss);
-      const takeProfit = fillPrice * (1 + bearSignal.takeProfit);
 
       this.state.positions[symbol] = {
         symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
         entryTime: new Date().toISOString(),
         highWaterMark: fillPrice,
-        trailingStop,
-        hardStop,
-        takeProfit,
+        trailingStop: bearSignal.stopLossPrice,
+        hardStop: bearSignal.stopLossPrice,
+        takeProfit: bearSignal.takeProfitPrice,
         bearMode: true,
       };
 
       this.state.lastBearSignal = {
         coin: symbol,
-        rsi: signal.rsi14,
-        volMultiple: parseFloat((signal.volume / signal.avgVolume20).toFixed(1)),
+        type: 'bear_range_trade',
+        entryPrice: fillPrice,
+        tpPrice: bearSignal.takeProfitPrice,
+        channelSupport: bearSignal.channelSupport,
+        channelResist: bearSignal.channelResist,
+        channelWidth: bearSignal.channelWidth,
+        rsi: bearSignal.rsi,
+        volMultiple: bearSignal.volMultiple,
         time: new Date().toISOString(),
       };
 
       this.addEvent('success',
-        `[EXP2][BEAR] Capitulation entry on ${symbol} @ $${fillPrice.toFixed(4)} | SL $${hardStop.toFixed(2)} | TP $${takeProfit.toFixed(2)}`
+        `[EXP2][BEAR] Range entry on ${symbol} @ $${fillPrice.toFixed(4)} | SL $${bearSignal.stopLossPrice.toFixed(2)} | TP $${bearSignal.takeProfitPrice.toFixed(2)}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {

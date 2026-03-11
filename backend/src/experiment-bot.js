@@ -6,7 +6,7 @@ const alpaca = require('./alpaca');
 const { evaluate } = require('./mean-reversion-strategy');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
-const { evaluateBearEntry } = require('./bearStrategy');
+const { evaluateBearEntry, setBearCooldown } = require('./bearStrategy');
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment-state.json');
 const SPREAD_COST_PCT = 0.0015;
@@ -295,10 +295,12 @@ class ExperimentBot {
           if (pos.bearMode && livePrice > 0) {
             if (livePrice <= pos.stopPrice) {
               await this.executeExit(symbol, livePrice, 'BEAR STOP LOSS');
+              setBearCooldown(symbol);
               continue;
             }
             if (livePrice >= pos.targetPrice) {
               await this.executeExit(symbol, livePrice, 'BEAR TAKE PROFIT');
+              // No cooldown on take profit — coin can be re-entered
               continue;
             }
           }
@@ -328,7 +330,7 @@ class ExperimentBot {
     if (!gate.open) {
       this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
 
-      // Bear mode: try capitulation recovery entries
+      // Bear mode: try channel range trade entries
       const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
       if (regime.regime === 'bear') {
         let openCount = Object.keys(this.state.positions).length;
@@ -336,8 +338,13 @@ class ExperimentBot {
           if (openCount >= this.config.maxPositions) break;
           if (this.state.positions[sig.symbol]) continue;
 
-          const bearSignal = await evaluateBearEntry(sig, regime);
+          const bearSignal = await evaluateBearEntry(sig, regime, sig.symbol, {
+            rsiOverride: 35, // Mean reversion: deeper oversold requirement
+            apiKey: this.config.apiKey,
+            secretKey: this.config.secretKey,
+          });
           if (bearSignal) {
+            this.addEvent('info', '[EXP1][BEAR] Range entry — mean reversion confirmation');
             await this.executeBearEntry(bearSignal, sig);
             openCount++;
           }
@@ -434,20 +441,26 @@ class ExperimentBot {
         entryTime: new Date().toISOString(),
         avg24h: signal.avg24h,
         deviation: signal.deviation,
-        stopPrice: fillPrice * (1 - bearSignal.stopLoss),
-        targetPrice: fillPrice * (1 + bearSignal.takeProfit),
+        stopPrice: bearSignal.stopLossPrice,
+        targetPrice: bearSignal.takeProfitPrice,
         bearMode: true,
       };
 
       this.state.lastBearSignal = {
         coin: symbol,
-        rsi: signal.rsi14,
-        volMultiple: parseFloat((signal.volume / signal.avgVolume20).toFixed(1)),
+        type: 'bear_range_trade',
+        entryPrice: fillPrice,
+        tpPrice: bearSignal.takeProfitPrice,
+        channelSupport: bearSignal.channelSupport,
+        channelResist: bearSignal.channelResist,
+        channelWidth: bearSignal.channelWidth,
+        rsi: bearSignal.rsi,
+        volMultiple: bearSignal.volMultiple,
         time: new Date().toISOString(),
       };
 
       this.addEvent('success',
-        `[EXP1][BEAR] Capitulation entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)}`
+        `[EXP1][BEAR] Range entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | TP $${bearSignal.takeProfitPrice.toFixed(2)} SL $${bearSignal.stopLossPrice.toFixed(2)}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {
