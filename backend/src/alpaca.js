@@ -199,17 +199,22 @@ async function getCryptoBarsMulti(
 
   try {
     const start = new Date(Date.now() - lookbackMs).toISOString();
+    // Alpaca v1beta3 multi-symbol endpoint: `limit` is total bars across ALL symbols per page,
+    // not per-symbol. Scale by symbol count so each symbol gets the requested number of bars.
+    const totalLimit = limit * uncached.length;
     const res = await axios.get(
       `https://data.alpaca.markets/v1beta3/crypto/us/bars`,
       {
-        params: { symbols: uncached.join(','), timeframe, limit, start },
+        params: { symbols: uncached.join(','), timeframe, limit: totalLimit, start },
         headers: getHeaders(apiKey, secretKey),
         timeout: 10000,
       },
     );
 
     for (const sym of uncached) {
-      const bars = formatBars(res.data?.bars?.[sym] || []);
+      const rawBars = res.data?.bars?.[sym] || [];
+      // Take only the last `limit` bars per symbol (API may return more)
+      const bars = formatBars(rawBars.slice(-limit));
       const cacheKey = `bars:${sym}:${timeframe}:${limit}`;
       cacheSet(cacheKey, bars);
       result.set(sym, bars);

@@ -732,79 +732,120 @@ export default function Dashboard() {
       <div className={styles.grid}>
         {/* LEFT: Signals */}
         <div className={styles.panel}>
-          <div className={styles.panelTitle}>▲ LIVE SIGNALS</div>
+          <div className={styles.panelTitle}>▲ LIVE SIGNALS {status?.regime?.current === "bear" ? "(Range Trading)" : "(Momentum)"}</div>
           {(status?.signals || []).length === 0 ? (
             <div className={styles.empty}>
               No signals yet — start bot to scan
             </div>
           ) : (
-            status.signals.map((s) => (
-              <div
-                key={s.symbol}
-                className={`${styles.signalCard} ${s.score >= 70 ? styles.hot : s.score >= 50 ? styles.warm : styles.cold}`}
-              >
-                <div className={styles.signalHeader}>
-                  <span className={styles.ticker}>
-                    {s.symbol.replace("/USD", "")}
-                  </span>
-                  <span
-                    className={`${styles.scoreTag} ${s.score >= 70 ? styles.scoreHigh : s.score >= 50 ? styles.scoreMed : styles.scoreLow}`}
-                  >
-                    SCORE {s.score}
-                  </span>
-                </div>
-                <div className={styles.metrics}>
-                  {[
-                    {
-                      l: "PRICE",
-                      v: s.price != null ? (s.price < 1 ? s.price.toFixed(4) : s.price.toFixed(2)) : "—",
-                      prefix: s.price != null ? "$" : "",
-                    },
-                    {
-                      l: "RSI",
-                      v: s.rsi?.toFixed(1),
-                      color:
-                        s.rsi < 35
-                          ? "var(--green)"
-                          : s.rsi > 70
-                            ? "var(--red)"
-                            : "",
-                    },
-                    {
-                      l: "VOLUME",
-                      v: `×${s.volumeRatio?.toFixed(2)}`,
-                      color: s.volumeRatio > 1.8 ? "var(--green)" : "",
-                    },
-                    {
-                      l: "MOM",
-                      v: `${s.momentum >= 0 ? "+" : ""}${s.momentum?.toFixed(2)}%`,
-                      color: s.momentum > 0 ? "var(--green)" : "var(--red)",
-                    },
-                  ].map((m) => (
-                    <div key={m.l} className={styles.metric}>
-                      <span className={styles.metricLabel}>{m.l}</span>
-                      <span
-                        className={styles.metricVal}
-                        style={{ color: m.color || "var(--text)" }}
-                      >
-                        {m.prefix || ""}
-                        {m.v}
-                      </span>
+            status.signals.map((s) => {
+              const isBear = status?.regime?.current === "bear";
+              const bc = status?.regime?.bearChannels?.[s.symbol] || status?.regime?.bearChannel;
+              const priceNearSupport = isBear && bc?.support ? s.price <= bc.support * 1.02 : false;
+              // Use hourly metrics from bear channel data (matches actual bear entry criteria)
+              const bearRsi = bc?.rsi ?? s.rsi;
+              const bearVol = bc?.volRatio ?? s.volumeRatio ?? 1;
+
+              const metrics = isBear ? [
+                {
+                  l: "PRICE",
+                  v: s.price != null ? (s.price < 1 ? s.price.toFixed(4) : s.price.toFixed(2)) : "\u2014",
+                  prefix: s.price != null ? "$" : "",
+                },
+                {
+                  l: "SUPPORT",
+                  v: bc?.support ? bc.support.toFixed(2) : "\u2014",
+                  prefix: bc?.support ? "$" : "",
+                  color: priceNearSupport ? "var(--green)" : "var(--dim)",
+                  tag: priceNearSupport ? " \u2713" : "",
+                },
+                {
+                  l: "RSI (1h)",
+                  v: bearRsi != null ? Number(bearRsi).toFixed(1) : "\u2014",
+                  color: bearRsi < 40 ? "var(--green)" : "var(--dim)",
+                  tag: bearRsi < 40 ? " \u2713" : "",
+                },
+                {
+                  l: "VOL (1h)",
+                  v: `\u00D7${Number(bearVol).toFixed(2)}`,
+                  color: bearVol > 1.5 ? "var(--green)" : "var(--dim)",
+                  tag: bearVol > 1.5 ? " \u2713" : "",
+                },
+                {
+                  l: "CHANNEL",
+                  v: bc?.width ? `${bc.width}%` : "\u2014",
+                  color: bc?.width >= 5 ? "var(--green)" : "var(--dim)",
+                  tag: bc?.width >= 5 ? " \u2713" : "",
+                },
+              ] : [
+                {
+                  l: "PRICE",
+                  v: s.price != null ? (s.price < 1 ? s.price.toFixed(4) : s.price.toFixed(2)) : "—",
+                  prefix: s.price != null ? "$" : "",
+                },
+                {
+                  l: "RSI",
+                  v: s.rsi?.toFixed(1),
+                  color: s.rsi < 35 ? "var(--green)" : s.rsi > 70 ? "var(--red)" : "",
+                },
+                {
+                  l: "VOLUME",
+                  v: `\u00D7${s.volumeRatio?.toFixed(2)}`,
+                  color: s.volumeRatio > 1.8 ? "var(--green)" : "",
+                },
+                {
+                  l: "MOM",
+                  v: `${s.momentum >= 0 ? "+" : ""}${s.momentum?.toFixed(2)}%`,
+                  color: s.momentum > 0 ? "var(--green)" : "var(--red)",
+                },
+              ];
+
+              const cardClass = isBear
+                ? (priceNearSupport && bearRsi < 40 && bearVol > 1.5 ? styles.hot : styles.cold)
+                : (s.score >= 70 ? styles.hot : s.score >= 50 ? styles.warm : styles.cold);
+
+              const scoreTagClass = isBear
+                ? (priceNearSupport && bearRsi < 40 ? styles.scoreHigh : styles.scoreLow)
+                : (s.score >= 70 ? styles.scoreHigh : s.score >= 50 ? styles.scoreMed : styles.scoreLow);
+
+              return (
+                <div key={s.symbol} className={`${styles.signalCard} ${cardClass}`}>
+                  <div className={styles.signalHeader}>
+                    <span className={styles.ticker}>
+                      {s.symbol.replace("/USD", "")}
+                    </span>
+                    <span className={`${styles.scoreTag} ${scoreTagClass}`}>
+                      {isBear ? (priceNearSupport && s.rsi < 40 ? "NEAR SUPPORT" : "WATCHING") : `SCORE ${s.score}`}
+                    </span>
+                  </div>
+                  <div className={styles.metrics}>
+                    {metrics.map((m) => (
+                      <div key={m.l} className={styles.metric}>
+                        <span className={styles.metricLabel}>{m.l}</span>
+                        <span
+                          className={styles.metricVal}
+                          style={{ color: m.color || "var(--text)" }}
+                        >
+                          {m.prefix || ""}
+                          {m.v}
+                          {m.tag || ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {s.stale && (
+                    <div className={styles.reasons} style={{ color: "var(--yellow)" }}>
+                      ⚠ Bar data {s.barAgeMin}min stale — indicators unreliable
                     </div>
-                  ))}
+                  )}
+                  {s.reasons?.length > 0 && !s.stale && (
+                    <div className={styles.reasons}>
+                      {s.reasons.slice(0, 2).join(" · ")}
+                    </div>
+                  )}
                 </div>
-                {s.stale && (
-                  <div className={styles.reasons} style={{ color: "var(--yellow)" }}>
-                    ⚠ Bar data {s.barAgeMin}min stale — indicators unreliable
-                  </div>
-                )}
-                {s.reasons?.length > 0 && !s.stale && (
-                  <div className={styles.reasons}>
-                    {s.reasons.slice(0, 2).join(" · ")}
-                  </div>
-                )}
-              </div>
-            ))
+              );
+            })
           )}
 
           <div className={styles.panelTitle} style={{ marginTop: 8 }}>
@@ -845,9 +886,20 @@ export default function Dashboard() {
                     Entry {fmt$(pos.entryPrice)} · Now{" "}
                     {fmt$(curPrice)}
                   </div>
-                  <div className={styles.posDetails}>
-                    SL {fmt$(pos.stopPrice)} · TP {pos.targetPrice === "TRAILING" ? "🚀 Chasing Gains" : fmt$(pos.targetPrice)}
-                  </div>
+                  {pos.bearMode ? (
+                    <>
+                      <div className={styles.posDetails} style={{ color: "#ff6680" }}>
+                        Channel SL {fmt$(pos.stopPrice)} · Channel TP {fmt$(pos.targetPrice)}
+                      </div>
+                      <div className={styles.posDetails} style={{ color: "#ff6680" }}>
+                        Max Hold 48h · {pos.entryTime ? `${Math.round((Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60))}h elapsed` : "—"}
+                      </div>
+                    </>
+                  ) : (
+                    <div className={styles.posDetails}>
+                      SL {fmt$(pos.stopPrice)} · TP {pos.targetPrice === "TRAILING" ? "\uD83D\uDE80 Chasing Gains" : fmt$(pos.targetPrice)}
+                    </div>
+                  )}
                   <div
                     className={styles.posDetails}
                     style={{ marginTop: 2, color: "var(--dim)" }}
@@ -1041,31 +1093,77 @@ export default function Dashboard() {
         <div className={`${styles.panel} ${styles.rightPanel}`}>
           <div className={styles.panelTitle}>▲ CONFIGURATION</div>
 
+          {/* ACTIVE STRATEGY — auto-toggles with market regime */}
+          {(() => {
+            const regime = status?.regime;
+            const isBear = regime?.current === "bear";
+            const accentColor = isBear ? "#ff3355" : "#00ff88";
+            const bgTint = isBear ? "rgba(255,51,85,0.06)" : "rgba(0,255,136,0.06)";
+            const borderTint = isBear ? "rgba(255,51,85,0.2)" : "rgba(0,255,136,0.2)";
+
+            const entryRows = isBear ? [
+              { label: "Price Near Support", value: "≤ 2% above support" },
+              { label: "RSI (1h)", value: "< 40 (oversold)" },
+              { label: "Volume", value: "> 1.5x average" },
+              { label: "Channel Width", value: "> 5%" },
+              { label: "Channel", value: "Descending" },
+              { label: "Green Candle", value: "Required (Main)" },
+            ] : [
+              { label: "Signal Score", value: `≥ ${config?.entryScoreThreshold || 65}` },
+              { label: "RSI", value: `< ${config?.rsiBuy || 35} (oversold)` },
+              { label: "SMA Crossover", value: "SMA5 > SMA20" },
+              { label: "Volume", value: "> 1.5x average" },
+              { label: "Momentum", value: "> 0.5%" },
+              { label: "HTF Confirm", value: "1h trend not bearish" },
+            ];
+
+            const exitRows = isBear ? [
+              { label: "Take Profit", value: "80% of channel width" },
+              { label: "Stop Loss", value: "3% below support" },
+              { label: "Max Hold", value: "48h" },
+              { label: "Cooldown", value: "8h after stop loss" },
+            ] : [
+              { label: "Stop Loss", value: `-${config?.stopLoss || 5}%` },
+              { label: "Take Profit", value: `+${config?.takeProfit || 15}%` },
+              { label: "Profit Protect", value: `${config?.profitGiveback || 25}% giveback` },
+              { label: "Max Hold", value: `${config?.maxHoldHours || 24}h` },
+              { label: "Daily Loss Limit", value: `-${config?.dailyLossLimit || 5}%` },
+            ];
+
+            return (
+              <div className={styles.configSection} style={{ background: bgTint, border: `1px solid ${borderTint}`, borderRadius: 6, padding: "10px 12px", marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12 }}>{isBear ? "\uD83D\uDD34" : "\uD83D\uDFE2"}</span>
+                  <span style={{ color: accentColor, fontWeight: 700, fontSize: 11, letterSpacing: 1 }}>
+                    {isBear ? "BEAR MODE — Range Trading" : "BULL MODE — Momentum"}
+                  </span>
+                </div>
+
+                <div className={styles.configLabel} style={{ color: accentColor }}>ENTRY CRITERIA</div>
+                {entryRows.map((s) => (
+                  <div key={s.label} className={styles.configRow}>
+                    <span className={styles.configRowLabel}>{s.label}</span>
+                    <span className={styles.configRowVal}>{s.value}</span>
+                  </div>
+                ))}
+
+                <div className={styles.configLabel} style={{ marginTop: 10, color: accentColor }}>EXIT CRITERIA</div>
+                {exitRows.map((s) => (
+                  <div key={s.label} className={styles.configRow}>
+                    <span className={styles.configRowLabel}>{s.label}</span>
+                    <span className={styles.configRowVal}>{s.value}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
           {config && <div className={styles.configSection}>
-            <div className={styles.configLabel}>STRATEGY PARAMETERS</div>
+            <div className={styles.configLabel}>GENERAL PARAMETERS</div>
             {[
               { label: "Position Size", value: `${config.positionSize}%` },
-              { label: "Stop Loss", value: `-${config.stopLoss}%` },
-              { label: "Take Profit", value: `+${config.takeProfit}%` },
-              { label: "RSI Buy Below", value: config.rsiBuy },
-              { label: "RSI Sell Above", value: config.rsiSell },
-              { label: "Scan Interval", value: `${config.scanInterval}s` },
-            ].map((s) => (
-              <div key={s.label} className={styles.configRow}>
-                <span className={styles.configRowLabel}>{s.label}</span>
-                <span className={styles.configRowVal}>{s.value}</span>
-              </div>
-            ))}
-
-            <div className={styles.configLabel} style={{ marginTop: 16 }}>
-              RISK MANAGEMENT
-            </div>
-            {[
               { label: "Max Positions", value: config.maxPositions },
-              { label: "Entry Score Min", value: config.entryScoreThreshold },
-              { label: "Daily Loss Limit", value: `-${config.dailyLossLimit}%` },
-              { label: "Max Hold Time", value: `${config.maxHoldHours}h` },
-              { label: "Profit Protect", value: `${config.profitGiveback}%` },
+              { label: "Scan Interval", value: `${config.scanInterval}s` },
             ].map((s) => (
               <div key={s.label} className={styles.configRow}>
                 <span className={styles.configRowLabel}>{s.label}</span>
@@ -1243,11 +1341,50 @@ export default function Dashboard() {
           <div className={styles.grid}>
             {/* LEFT: Signals */}
             <div className={styles.panel}>
-              <div className={styles.panelTitle}>▲ HYBRID SIGNALS (Mean Reversion + Momentum)</div>
+              <div className={styles.panelTitle}>▲ {es?.regime?.current === "bear" ? "SIGNALS (Range Trading)" : "HYBRID SIGNALS (Mean Reversion + Momentum)"}</div>
               {(es?.signals || []).length === 0 ? (
                 <div className={styles.empty}>No signals yet — start experiment to scan</div>
               ) : (
                 es.signals.map((s) => {
+                  const isBearMode = es?.regime?.current === "bear";
+                  const bc = es?.regime?.bearChannels?.[s.symbol] || es?.regime?.bearChannel;
+                  const bearRsi = bc?.rsi ?? s.rsi;
+                  const bearVol = bc?.volRatio ?? s.volRatio ?? s.volumeRatio ?? 1;
+
+                  if (isBearMode) {
+                    const priceNearSupport = bc?.support ? s.price <= bc.support * 1.02 : false;
+                    const rsiOk = bearRsi < 40;
+                    const volOk = bearVol > 1.5;
+                    const allMet = priceNearSupport && rsiOk && volOk;
+                    return (
+                      <div key={s.symbol} className={`${styles.signalCard} ${allMet ? styles.hot : styles.cold}`}>
+                        <div className={styles.signalHeader}>
+                          <span className={styles.ticker}>{s.symbol.replace("/USD", "")}</span>
+                          <span className={`${styles.scoreTag} ${allMet ? styles.scoreHigh : styles.scoreLow}`}>
+                            {allMet ? "NEAR SUPPORT" : "WATCHING"}
+                          </span>
+                        </div>
+                        <div className={styles.metrics}>
+                          {[
+                            { l: "PRICE", v: `$${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}` },
+                            { l: "SUPPORT", v: bc?.support ? `$${bc.support.toFixed(2)}` : "\u2014", color: priceNearSupport ? "var(--green)" : "var(--dim)", tag: priceNearSupport ? " \u2713" : "" },
+                            { l: "RSI (1h)", v: bearRsi != null ? Number(bearRsi).toFixed(1) : "\u2014", color: rsiOk ? "var(--green)" : "var(--dim)", tag: rsiOk ? " \u2713" : "" },
+                            { l: "VOL (1h)", v: `\u00D7${Number(bearVol).toFixed(2)}`, color: volOk ? "var(--green)" : "var(--dim)", tag: volOk ? " \u2713" : "" },
+                            { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: bc?.width >= 5 ? "var(--green)" : "var(--dim)", tag: bc?.width >= 5 ? " \u2713" : "" },
+                          ].map((m) => (
+                            <div key={m.l} className={styles.metric}>
+                              <span className={styles.metricLabel}>{m.l}</span>
+                              <span className={styles.metricVal} style={{ color: m.color || "var(--text)" }}>{m.v}{m.tag || ""}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {s.reasons?.length > 0 && (
+                          <div className={styles.reasons}>{s.reasons.join(" · ")}</div>
+                        )}
+                      </div>
+                    );
+                  }
+
                   const isBuy = s.signal === "buy";
                   const isSell = s.signal === "sell";
                   return (
@@ -1282,13 +1419,13 @@ export default function Dashboard() {
                         <div className={styles.metric}>
                           <span className={styles.metricLabel}>RSI</span>
                           <span className={styles.metricVal} style={{ color: s.rsi < 35 ? "var(--green)" : s.rsi > 70 ? "var(--red)" : "var(--text)" }}>
-                            {s.rsi ?? "—"}
+                            {s.rsi ?? "\u2014"}
                           </span>
                         </div>
                         <div className={styles.metric}>
                           <span className={styles.metricLabel}>ROC</span>
                           <span className={styles.metricVal} style={{ color: s.minuteROC > 0 ? "var(--green)" : s.minuteROC < 0 ? "var(--red)" : "var(--dim)" }}>
-                            {s.minuteROC != null ? `${s.minuteROC > 0 ? "+" : ""}${s.minuteROC}%` : "—"}
+                            {s.minuteROC != null ? `${s.minuteROC > 0 ? "+" : ""}${s.minuteROC}%` : "\u2014"}
                           </span>
                         </div>
                       </div>
@@ -1326,11 +1463,22 @@ export default function Dashboard() {
                       <div className={styles.posDetails}>
                         Entry {fmt$(pos.entryPrice)} · Now {fmt$(curPrice)}
                       </div>
-                      <div className={styles.posDetails}>
-                        24h Avg {fmt$(pos.avg24h)} · Dev {pos.deviation?.toFixed(2)}% · {pos.trend === "rising" ? "Rising" : pos.trend === "falling" ? `Falling (${pos.consecutiveDips || 0} dips)` : "Flat"} · RSI {pos.rsi ?? "—"}
-                      </div>
+                      {pos.bearMode ? (
+                        <>
+                          <div className={styles.posDetails} style={{ color: "#ff6680" }}>
+                            Channel SL {fmt$(pos.stopPrice)} · Channel TP {fmt$(pos.targetPrice)}
+                          </div>
+                          <div className={styles.posDetails} style={{ color: "#ff6680" }}>
+                            Max Hold 36h · {pos.entryTime ? `${Math.round((Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60))}h elapsed` : "\u2014"}
+                          </div>
+                        </>
+                      ) : (
+                        <div className={styles.posDetails}>
+                          24h Avg {fmt$(pos.avg24h)} · Dev {pos.deviation?.toFixed(2)}% · {pos.trend === "rising" ? "Rising" : pos.trend === "falling" ? `Falling (${pos.consecutiveDips || 0} dips)` : "Flat"} · RSI {pos.rsi ?? "\u2014"}
+                        </div>
+                      )}
                       <div className={styles.posDetails} style={{ marginTop: 2, color: "var(--dim)" }}>
-                        {pos.entryTime ? new Date(pos.entryTime).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "—"} · ${pos.notional?.toFixed(2)} invested
+                        {pos.entryTime ? new Date(pos.entryTime).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "\u2014"} · ${pos.notional?.toFixed(2)} invested
                       </div>
                       <button className={styles.btnSell} onClick={async () => {
                         if (!confirm(`Sell ${pos.symbol?.replace("/USD", "")} now?`)) return;
@@ -1389,15 +1537,73 @@ export default function Dashboard() {
             {/* RIGHT: Config + Controls */}
             <div className={`${styles.panel} ${styles.rightPanel}`}>
               <div className={styles.panelTitle}>▲ EXPERIMENT CONFIG</div>
+
+              {/* ACTIVE STRATEGY — auto-toggles with market regime */}
+              {(() => {
+                const regime = es?.regime;
+                const isBear = regime?.current === "bear";
+                const accentColor = isBear ? "#ff3355" : "#00ff88";
+                const bgTint = isBear ? "rgba(255,51,85,0.06)" : "rgba(0,255,136,0.06)";
+                const borderTint = isBear ? "rgba(255,51,85,0.2)" : "rgba(0,255,136,0.2)";
+
+                const entryRows = isBear ? [
+                  { label: "Price Near Support", value: "≤ 2% above support" },
+                  { label: "RSI (1h)", value: "< 40 (oversold)" },
+                  { label: "Volume", value: "> 1.5x average" },
+                  { label: "Channel Width", value: "> 5%" },
+                  { label: "Channel", value: "Descending" },
+                ] : [
+                  { label: "Dip Threshold", value: `${((es?.config?.dipThreshold || 0.015) * 100).toFixed(1)}% below 24h avg` },
+                  { label: "RSI", value: "< 35 (oversold)" },
+                  { label: "Volume", value: "> 1.5x average" },
+                  { label: "Trend", value: "Consecutive dips detected" },
+                ];
+
+                const exitRows = isBear ? [
+                  { label: "Take Profit", value: "80% of channel width" },
+                  { label: "Stop Loss", value: "3% below support" },
+                  { label: "Max Hold", value: "48h" },
+                  { label: "Cooldown", value: "8h after stop loss" },
+                ] : [
+                  { label: "Momentum Exit", value: "Exhaustion detected" },
+                  { label: "Consec. Down Bars", value: "Triggers exit" },
+                  { label: "Max Hold", value: `${es?.config?.maxHoldHours || 4}h` },
+                ];
+
+                return (
+                  <div className={styles.configSection} style={{ background: bgTint, border: `1px solid ${borderTint}`, borderRadius: 6, padding: "10px 12px", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      <span style={{ fontSize: 12 }}>{isBear ? "\uD83D\uDD34" : "\uD83D\uDFE2"}</span>
+                      <span style={{ color: accentColor, fontWeight: 700, fontSize: 11, letterSpacing: 1 }}>
+                        {isBear ? "BEAR MODE — Range Trading" : "BULL MODE — Mean Reversion"}
+                      </span>
+                    </div>
+
+                    <div className={styles.configLabel} style={{ color: accentColor }}>ENTRY CRITERIA</div>
+                    {entryRows.map((s) => (
+                      <div key={s.label} className={styles.configRow}>
+                        <span className={styles.configRowLabel}>{s.label}</span>
+                        <span className={styles.configRowVal}>{s.value}</span>
+                      </div>
+                    ))}
+
+                    <div className={styles.configLabel} style={{ marginTop: 10, color: accentColor }}>EXIT CRITERIA</div>
+                    {exitRows.map((s) => (
+                      <div key={s.label} className={styles.configRow}>
+                        <span className={styles.configRowLabel}>{s.label}</span>
+                        <span className={styles.configRowVal}>{s.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
               <div className={styles.configSection}>
-                <div className={styles.configLabel}>MEAN REVERSION</div>
+                <div className={styles.configLabel}>GENERAL PARAMETERS</div>
                 {[
-                  { label: "Strategy", value: "Mean Reversion" },
-                  { label: "Dip Threshold", value: `${((es?.config?.dipThreshold || 0.015) * 100).toFixed(1)}%` },
                   { label: "Position Size", value: `${Math.round((es?.config?.positionSize || 0.33) * 100)}%` },
                   { label: "Max Positions", value: es?.config?.maxPositions || 2 },
                   { label: "Scan Interval", value: `${es?.config?.scanInterval || 30}s` },
-                  { label: "Max Hold Time", value: `${es?.config?.maxHoldHours || 4}h` },
                 ].map((s) => (
                   <div key={s.label} className={styles.configRow}>
                     <span className={styles.configRowLabel}>{s.label}</span>
@@ -1472,13 +1678,51 @@ export default function Dashboard() {
           <div className={styles.grid}>
             {/* LEFT: Signals */}
             <div className={styles.panel}>
-              <div className={styles.panelTitle}>▲ BREAKOUT SIGNALS (20-Bar Momentum)</div>
+              <div className={styles.panelTitle}>▲ {e2?.regime?.current === "bear" ? "SIGNALS (BTC Accumulation)" : "BREAKOUT SIGNALS (20-Bar Momentum)"}</div>
               {(e2?.signals || []).length === 0 ? (
                 <div className={styles.empty}>No signals yet — start experiment 2 to scan</div>
               ) : (
                 e2.signals.map((s) => {
+                  const isBearMode = e2?.regime?.current === "bear";
+                  const bc = e2?.regime?.bearChannels?.[s.symbol] || e2?.regime?.bearChannel;
+                  const bearRsi = bc?.rsi ?? s.rsi;
+                  const bearVol = bc?.volRatio ?? s.volumeRatio ?? 1;
+
+                  if (isBearMode) {
+                    const priceNearSupport = bc?.support ? s.price <= bc.support * 1.02 : false;
+                    const rsiOk = bearRsi < 40;
+                    const volOk = bearVol > 1.5;
+                    const allBearMet = priceNearSupport && rsiOk && volOk;
+                    return (
+                      <div key={s.symbol} className={`${styles.signalCard} ${allBearMet ? styles.hot : styles.cold}`}>
+                        <div className={styles.signalHeader}>
+                          <span className={styles.ticker}>{s.symbol.replace("/USD", "")}</span>
+                          <span className={`${styles.scoreTag} ${allBearMet ? styles.scoreHigh : styles.scoreLow}`}>
+                            {allBearMet ? "NEAR SUPPORT" : "WATCHING"}
+                          </span>
+                        </div>
+                        <div className={styles.metrics}>
+                          {[
+                            { l: "PRICE", v: `$${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}` },
+                            { l: "SUPPORT", v: bc?.support ? `$${bc.support.toFixed(2)}` : "\u2014", color: priceNearSupport ? "var(--green)" : "var(--dim)", tag: priceNearSupport ? " \u2713" : "" },
+                            { l: "RSI (1h)", v: bearRsi != null ? Number(bearRsi).toFixed(1) : "\u2014", color: rsiOk ? "var(--green)" : "var(--dim)", tag: rsiOk ? " \u2713" : "" },
+                            { l: "VOL (1h)", v: `\u00D7${Number(bearVol).toFixed(2)}`, color: volOk ? "var(--green)" : "var(--dim)", tag: volOk ? " \u2713" : "" },
+                            { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: bc?.width >= 5 ? "var(--green)" : "var(--dim)", tag: bc?.width >= 5 ? " \u2713" : "" },
+                          ].map((m) => (
+                            <div key={m.l} className={styles.metric}>
+                              <span className={styles.metricLabel}>{m.l}</span>
+                              <span className={styles.metricVal} style={{ color: m.color || "var(--text)" }}>{m.v}{m.tag || ""}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {s.reasons?.length > 0 && (
+                          <div className={styles.reasons}>{s.reasons.join(" · ")}</div>
+                        )}
+                      </div>
+                    );
+                  }
+
                   const isBuy = s.signal === "buy";
-                  const allMet = s.conditions?.breakout && s.conditions?.volume && s.conditions?.trend && s.conditions?.rsi;
                   return (
                     <div key={s.symbol} className={`${styles.signalCard} ${isBuy ? styles.hot : styles.cold}`}>
                       <div className={styles.signalHeader}>
@@ -1496,25 +1740,25 @@ export default function Dashboard() {
                           <span className={styles.metricLabel}>20-BAR HIGH</span>
                           <span className={styles.metricVal} style={{ color: s.conditions?.breakout ? "var(--green)" : "var(--dim)" }}>
                             ${s.breakoutHigh < 1 ? s.breakoutHigh?.toFixed(4) : s.breakoutHigh?.toFixed(2)}
-                            {s.conditions?.breakout ? " ✓" : ""}
+                            {s.conditions?.breakout ? " \u2713" : ""}
                           </span>
                         </div>
                         <div className={styles.metric}>
                           <span className={styles.metricLabel}>VOLUME</span>
                           <span className={styles.metricVal} style={{ color: s.conditions?.volume ? "var(--green)" : "var(--dim)" }}>
-                            {s.volumeRatio?.toFixed(1)}x{s.conditions?.volume ? " ✓" : ""}
+                            {s.volumeRatio?.toFixed(1)}x{s.conditions?.volume ? " \u2713" : ""}
                           </span>
                         </div>
                         <div className={styles.metric}>
                           <span className={styles.metricLabel}>TREND</span>
                           <span className={styles.metricVal} style={{ color: s.conditions?.trend ? "var(--green)" : "var(--dim)" }}>
-                            {s.conditions?.trend ? "Above SMA50 ✓" : "Below SMA50"}
+                            {s.conditions?.trend ? "Above SMA50 \u2713" : "Below SMA50"}
                           </span>
                         </div>
                         <div className={styles.metric}>
                           <span className={styles.metricLabel}>RSI</span>
                           <span className={styles.metricVal} style={{ color: s.conditions?.rsi ? "var(--green)" : s.rsi > 72 ? "var(--red)" : "var(--dim)" }}>
-                            {s.rsi ?? "—"}{s.conditions?.rsi ? " ✓" : ""}
+                            {s.rsi ?? "\u2014"}{s.conditions?.rsi ? " \u2713" : ""}
                           </span>
                         </div>
                       </div>
@@ -1543,13 +1787,24 @@ export default function Dashboard() {
                         </span>
                       </div>
                       <div className={styles.posDetails}>
-                        Entry {fmt$(pos.entryPrice)} · Now {fmt$(curPrice)} · High {fmt$(pos.highWaterMark)}
+                        Entry {fmt$(pos.entryPrice)} · Now {fmt$(curPrice)}{!pos.bearMode ? ` · High ${fmt$(pos.highWaterMark)}` : ""}
                       </div>
-                      <div className={styles.posDetails}>
-                        Trail SL {fmt$(pos.trailingStop)} · Hard SL {fmt$(pos.hardStop)} · TP {fmt$(pos.takeProfit)}
-                      </div>
+                      {pos.bearMode ? (
+                        <>
+                          <div className={styles.posDetails} style={{ color: "#ff6680" }}>
+                            Channel SL {fmt$(pos.stopPrice || pos.hardStop)} · Channel TP {pos.takeProfit === "TRAILING" || pos.takeProfit === Infinity ? "Gate Reopen" : fmt$(pos.takeProfit)}
+                          </div>
+                          <div className={styles.posDetails} style={{ color: "#ff6680" }}>
+                            DCA Accumulation · {pos.entryTime ? `${Math.round((Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60))}h elapsed` : "\u2014"}
+                          </div>
+                        </>
+                      ) : (
+                        <div className={styles.posDetails}>
+                          Trail SL {fmt$(pos.trailingStop)} · Hard SL {fmt$(pos.hardStop)} · TP {fmt$(pos.takeProfit)}
+                        </div>
+                      )}
                       <div className={styles.posDetails} style={{ marginTop: 2, color: "var(--dim)" }}>
-                        {pos.entryTime ? new Date(pos.entryTime).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "—"} · ${pos.notional?.toFixed(2)} invested
+                        {pos.entryTime ? new Date(pos.entryTime).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "\u2014"} · ${pos.notional?.toFixed(2)} invested
                       </div>
                       <button className={styles.btnSell} onClick={async () => {
                         if (!confirm(`Sell ${pos.symbol?.replace("/USD", "")} now?`)) return;
@@ -1608,18 +1863,75 @@ export default function Dashboard() {
             {/* RIGHT: Config + Controls */}
             <div className={`${styles.panel} ${styles.rightPanel}`}>
               <div className={styles.panelTitle}>▲ BREAKOUT CONFIG</div>
+
+              {/* ACTIVE STRATEGY — auto-toggles with market regime */}
+              {(() => {
+                const regime = e2?.regime;
+                const isBear = regime?.current === "bear";
+                const accentColor = isBear ? "#ff3355" : "#00ff88";
+                const bgTint = isBear ? "rgba(255,51,85,0.06)" : "rgba(0,255,136,0.06)";
+                const borderTint = isBear ? "rgba(255,51,85,0.2)" : "rgba(0,255,136,0.2)";
+
+                const entryRows = isBear ? [
+                  { label: "Price Near Support", value: "≤ 2% above support" },
+                  { label: "RSI (1h)", value: "< 40 (oversold)" },
+                  { label: "Volume", value: "> 1.5x average" },
+                  { label: "Channel Width", value: "> 5%" },
+                  { label: "Channel", value: "Descending" },
+                ] : [
+                  { label: "20-Bar Breakout", value: "Price > 20-bar high" },
+                  { label: "Volume", value: "> 1.5x average" },
+                  { label: "Trend", value: "Above SMA50" },
+                  { label: "RSI", value: "< 72 (not overbought)" },
+                ];
+
+                const exitRows = isBear ? [
+                  { label: "Take Profit", value: "80% of channel width" },
+                  { label: "Stop Loss", value: "3% below support" },
+                  { label: "Max Hold", value: "48h" },
+                  { label: "Cooldown", value: "8h after stop loss" },
+                ] : [
+                  { label: "Trailing Stop", value: `${(e2?.config?.trailingStopPct || 0.15) * 100}% from high` },
+                  { label: "Hard Stop", value: `-${(e2?.config?.hardStopPct || 0.20) * 100}%` },
+                  { label: "Take Profit", value: `${(e2?.config?.takeProfitMultiple || 3)}x stop` },
+                  { label: "Max Hold", value: `${e2?.config?.maxHoldHours || 72}h` },
+                  { label: "Cooldown", value: `${e2?.config?.cooldownCandles || 2} candles` },
+                ];
+
+                return (
+                  <div className={styles.configSection} style={{ background: bgTint, border: `1px solid ${borderTint}`, borderRadius: 6, padding: "10px 12px", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      <span style={{ fontSize: 12 }}>{isBear ? "\uD83D\uDD34" : "\uD83D\uDFE2"}</span>
+                      <span style={{ color: accentColor, fontWeight: 700, fontSize: 11, letterSpacing: 1 }}>
+                        {isBear ? "BEAR MODE — Range Trading" : "BULL MODE — Momentum Breakout"}
+                      </span>
+                    </div>
+
+                    <div className={styles.configLabel} style={{ color: accentColor }}>ENTRY CRITERIA</div>
+                    {entryRows.map((s) => (
+                      <div key={s.label} className={styles.configRow}>
+                        <span className={styles.configRowLabel}>{s.label}</span>
+                        <span className={styles.configRowVal}>{s.value}</span>
+                      </div>
+                    ))}
+
+                    <div className={styles.configLabel} style={{ marginTop: 10, color: accentColor }}>EXIT CRITERIA</div>
+                    {exitRows.map((s) => (
+                      <div key={s.label} className={styles.configRow}>
+                        <span className={styles.configRowLabel}>{s.label}</span>
+                        <span className={styles.configRowVal}>{s.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
               <div className={styles.configSection}>
-                <div className={styles.configLabel}>MOMENTUM BREAKOUT</div>
+                <div className={styles.configLabel}>GENERAL PARAMETERS</div>
                 {[
-                  { label: "Strategy", value: "20-Bar Breakout" },
                   { label: "Position Size", value: `${Math.round((e2?.config?.positionSize || 0.95) * 100)}%` },
                   { label: "Max Positions", value: e2?.config?.maxPositions || 1 },
-                  { label: "Trailing Stop", value: `${(e2?.config?.trailingStopPct || 0.15) * 100}%` },
-                  { label: "Hard Stop", value: `${(e2?.config?.hardStopPct || 0.20) * 100}%` },
-                  { label: "Take Profit", value: `${(e2?.config?.takeProfitMultiple || 3)}x stop` },
-                  { label: "Max Hold Time", value: `${e2?.config?.maxHoldHours || 72}h` },
                   { label: "Min Balance", value: `$${e2?.config?.minBalance || 15}` },
-                  { label: "Cooldown", value: `${e2?.config?.cooldownCandles || 2} candles` },
                   { label: "Scan Interval", value: `${e2?.config?.scanInterval || 30}s` },
                 ].map((s) => (
                   <div key={s.label} className={styles.configRow}>

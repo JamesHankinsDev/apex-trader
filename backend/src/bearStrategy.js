@@ -94,19 +94,32 @@ async function getChannelData(coin, apiKey, secretKey) {
     const bars = await alpaca.getCryptoBars(
       apiKey, secretKey, coin, '1Hour', 48, FORTY_EIGHT_HOURS_MS + 4 * 60 * 60 * 1000
     );
-    if (!bars || bars.length < 10) return { support: null, resist: null, width: null };
+    if (!bars || bars.length < 10) return { support: null, resist: null, width: null, volRatio: null, rsi: null };
 
     const channel = detectChannel(bars);
-    if (!channel) return { support: null, resist: null, width: null };
+
+    // Compute hourly volume ratio (same metric used by bear entry check)
+    const currentVolume = bars[bars.length - 1].v;
+    const volBars = bars.slice(-21, -1);
+    const avgVolume = volBars.length > 0 ? volBars.reduce((a, b) => a + b.v, 0) / volBars.length : 0;
+    const volRatio = avgVolume > 0 ? parseFloat((currentVolume / avgVolume).toFixed(2)) : null;
+
+    // Compute hourly RSI (same metric used by bear entry check)
+    const closes = bars.map(b => b.c);
+    const rsi = closes.length >= 15 ? parseFloat(calcRSI(closes).toFixed(1)) : null;
+
+    if (!channel) return { support: null, resist: null, width: null, volRatio, rsi };
 
     const width = ((channel.resistance - channel.support) / channel.support) * 100;
     return {
       support: parseFloat(channel.support.toFixed(2)),
       resist: parseFloat(channel.resistance.toFixed(2)),
       width: parseFloat(width.toFixed(2)),
+      volRatio,
+      rsi,
     };
   } catch {
-    return { support: null, resist: null, width: null };
+    return { support: null, resist: null, width: null, volRatio: null, rsi: null };
   }
 }
 

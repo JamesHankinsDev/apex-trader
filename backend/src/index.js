@@ -52,16 +52,27 @@ async function getSharedMarketData() {
     ]);
 
     let bearChannel = null;
+    let bearChannels = null;
     if (regime.regime === 'bear') {
       try {
-        const coin = (bot.config.watchlist || [])[0] || 'BTC/USD';
-        bearChannel = await getChannelData(coin, apiKey, secretKey);
+        const watchlist = bot.config.watchlist || experimentBot.config.watchlist
+          || experiment2Bot.config.watchlist || ['BTC/USD'];
+        const channelResults = await Promise.all(
+          watchlist.map(coin => getChannelData(coin, apiKey, secretKey).catch(() => ({ support: null, resist: null, width: null })))
+        );
+        bearChannels = {};
+        watchlist.forEach((coin, i) => {
+          const sym = coin.includes('/') ? coin : coin.replace(/USD$/, '/USD');
+          bearChannels[sym] = channelResults[i];
+        });
+        // Keep bearChannel as the first coin's data for backward compat (BTC Gate bar)
+        bearChannel = channelResults[0] || { support: null, resist: null, width: null };
       } catch {
         bearChannel = { support: null, resist: null, width: null };
       }
     }
 
-    sharedMarketData = { gate, regime, liveBtc, bearChannel };
+    sharedMarketData = { gate, regime, liveBtc, bearChannel, bearChannels };
     sharedMarketDataFetchedAt = Date.now();
     return sharedMarketData;
   } catch {
@@ -71,7 +82,7 @@ async function getSharedMarketData() {
 
 function attachMarketData(status, market) {
   if (!market) return;
-  const { gate, regime, liveBtc, bearChannel } = market;
+  const { gate, regime, liveBtc, bearChannel, bearChannels } = market;
   status.btcGate = gate;
   status.regime = {
     current: regime.regime,
@@ -82,6 +93,7 @@ function attachMarketData(status, market) {
     sma50: regime.sma50,
   };
   if (bearChannel) status.regime.bearChannel = bearChannel;
+  if (bearChannels) status.regime.bearChannels = bearChannels;
 }
 
 // ─── BOT STATUS ───────────────────────────────────────────────
