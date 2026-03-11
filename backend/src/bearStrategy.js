@@ -193,7 +193,11 @@ async function evaluateBearEntry(signals, regime, coin, options = {}) {
 
   const currentPrice = signals.price || bars[bars.length - 1].c;
 
-  // CONDITION 1 — Price near channel support
+  // CONDITION 1 — Price near channel support (but NOT below it — broken support = abort)
+  if (currentPrice < support) {
+    console.log(`[BEAR] ${symbol} BELOW support — support broken at ${support.toFixed(2)}, price ${currentPrice.toFixed(2)}`);
+    return null;
+  }
   if (currentPrice > support * 1.02) {
     console.log(`[BEAR] ${symbol} not near support — price ${currentPrice.toFixed(2)} vs support ${support.toFixed(2)}`);
     return null;

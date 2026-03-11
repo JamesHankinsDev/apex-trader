@@ -740,10 +740,22 @@ export default function Dashboard() {
             status.signals.map((s) => {
               const isBear = status?.regime?.current === "bear";
               const bc = status?.regime?.bearChannels?.[s.symbol] || status?.regime?.bearChannel;
-              const priceNearSupport = isBear && bc?.support ? s.price <= bc.support * 1.02 : false;
+              const priceNearSupport = isBear && bc?.support ? s.price >= bc.support && s.price <= bc.support * 1.02 : false;
+              const supportBroken = isBear && bc?.support ? s.price < bc.support : false;
+              const channelInverted = isBear && bc?.support && bc?.resist ? bc.support > bc.resist : false;
+              const aboveResistance = isBear && bc?.resist ? s.price > bc.resist : false;
               // Use hourly metrics from bear channel data (matches actual bear entry criteria)
               const bearRsi = bc?.rsi ?? s.rsi;
               const bearVol = bc?.volRatio ?? s.volumeRatio ?? 1;
+
+              // Channel health status
+              const channelOk = bc?.width >= 5 && !channelInverted;
+              const channelTag = channelInverted ? " INVERTED" : bc?.width < 5 ? " TOO TIGHT" : " \u2713";
+              const channelColor = channelInverted ? "var(--red)" : channelOk ? "var(--green)" : "var(--dim)";
+
+              // Price position relative to channel
+              const priceTag = supportBroken ? " BROKEN" : aboveResistance ? " BREAKOUT" : priceNearSupport ? " \u2713" : "";
+              const priceColor = supportBroken ? "var(--red)" : aboveResistance ? "var(--yellow, #f0ad4e)" : priceNearSupport ? "var(--green)" : "var(--dim)";
 
               const metrics = isBear ? [
                 {
@@ -755,8 +767,8 @@ export default function Dashboard() {
                   l: "SUPPORT",
                   v: bc?.support ? bc.support.toFixed(2) : "\u2014",
                   prefix: bc?.support ? "$" : "",
-                  color: priceNearSupport ? "var(--green)" : "var(--dim)",
-                  tag: priceNearSupport ? " \u2713" : "",
+                  color: priceColor,
+                  tag: priceTag,
                 },
                 {
                   l: "RSI (1h)",
@@ -773,8 +785,8 @@ export default function Dashboard() {
                 {
                   l: "CHANNEL",
                   v: bc?.width ? `${bc.width}%` : "\u2014",
-                  color: bc?.width >= 5 ? "var(--green)" : "var(--dim)",
-                  tag: bc?.width >= 5 ? " \u2713" : "",
+                  color: channelColor,
+                  tag: bc?.width ? channelTag : "",
                 },
               ] : [
                 {
@@ -814,7 +826,7 @@ export default function Dashboard() {
                       {s.symbol.replace("/USD", "")}
                     </span>
                     <span className={`${styles.scoreTag} ${scoreTagClass}`}>
-                      {isBear ? (priceNearSupport && s.rsi < 40 ? "NEAR SUPPORT" : "WATCHING") : `SCORE ${s.score}`}
+                      {isBear ? (channelInverted ? "CHANNEL INVERTED" : supportBroken ? "SUPPORT BROKEN" : aboveResistance ? "ABOVE RESISTANCE" : priceNearSupport && bearRsi < 40 ? "NEAR SUPPORT" : "WATCHING") : `SCORE ${s.score}`}
                     </span>
                   </div>
                   <div className={styles.metrics}>
@@ -1351,25 +1363,33 @@ export default function Dashboard() {
                   const bearVol = bc?.volRatio ?? s.volRatio ?? s.volumeRatio ?? 1;
 
                   if (isBearMode) {
-                    const priceNearSupport = bc?.support ? s.price <= bc.support * 1.02 : false;
+                    const priceNearSupport = bc?.support ? s.price >= bc.support && s.price <= bc.support * 1.02 : false;
+                    const supportBroken = bc?.support ? s.price < bc.support : false;
+                    const channelInverted = bc?.support && bc?.resist ? bc.support > bc.resist : false;
+                    const aboveResistance = bc?.resist ? s.price > bc.resist : false;
                     const rsiOk = bearRsi < 40;
                     const volOk = bearVol > 1.5;
-                    const allMet = priceNearSupport && rsiOk && volOk;
+                    const channelOk = bc?.width >= 5 && !channelInverted;
+                    const channelTag = channelInverted ? " INVERTED" : bc?.width < 5 ? " TOO TIGHT" : " \u2713";
+                    const channelColor = channelInverted ? "var(--red)" : channelOk ? "var(--green)" : "var(--dim)";
+                    const priceTag = supportBroken ? " BROKEN" : aboveResistance ? " BREAKOUT" : priceNearSupport ? " \u2713" : "";
+                    const priceColor = supportBroken ? "var(--red)" : aboveResistance ? "var(--yellow, #f0ad4e)" : priceNearSupport ? "var(--green)" : "var(--dim)";
+                    const allMet = priceNearSupport && rsiOk && volOk && channelOk;
                     return (
                       <div key={s.symbol} className={`${styles.signalCard} ${allMet ? styles.hot : styles.cold}`}>
                         <div className={styles.signalHeader}>
                           <span className={styles.ticker}>{s.symbol.replace("/USD", "")}</span>
                           <span className={`${styles.scoreTag} ${allMet ? styles.scoreHigh : styles.scoreLow}`}>
-                            {allMet ? "NEAR SUPPORT" : "WATCHING"}
+                            {channelInverted ? "CHANNEL INVERTED" : supportBroken ? "SUPPORT BROKEN" : aboveResistance ? "ABOVE RESISTANCE" : allMet ? "NEAR SUPPORT" : "WATCHING"}
                           </span>
                         </div>
                         <div className={styles.metrics}>
                           {[
                             { l: "PRICE", v: `$${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}` },
-                            { l: "SUPPORT", v: bc?.support ? `$${bc.support.toFixed(2)}` : "\u2014", color: priceNearSupport ? "var(--green)" : "var(--dim)", tag: priceNearSupport ? " \u2713" : "" },
+                            { l: "SUPPORT", v: bc?.support ? `$${bc.support.toFixed(2)}` : "\u2014", color: priceColor, tag: priceTag },
                             { l: "RSI (1h)", v: bearRsi != null ? Number(bearRsi).toFixed(1) : "\u2014", color: rsiOk ? "var(--green)" : "var(--dim)", tag: rsiOk ? " \u2713" : "" },
                             { l: "VOL (1h)", v: `\u00D7${Number(bearVol).toFixed(2)}`, color: volOk ? "var(--green)" : "var(--dim)", tag: volOk ? " \u2713" : "" },
-                            { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: bc?.width >= 5 ? "var(--green)" : "var(--dim)", tag: bc?.width >= 5 ? " \u2713" : "" },
+                            { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: channelColor, tag: bc?.width ? channelTag : "" },
                           ].map((m) => (
                             <div key={m.l} className={styles.metric}>
                               <span className={styles.metricLabel}>{m.l}</span>
@@ -1688,25 +1708,33 @@ export default function Dashboard() {
                   const bearVol = bc?.volRatio ?? s.volumeRatio ?? 1;
 
                   if (isBearMode) {
-                    const priceNearSupport = bc?.support ? s.price <= bc.support * 1.02 : false;
+                    const priceNearSupport = bc?.support ? s.price >= bc.support && s.price <= bc.support * 1.02 : false;
+                    const supportBroken = bc?.support ? s.price < bc.support : false;
+                    const channelInverted = bc?.support && bc?.resist ? bc.support > bc.resist : false;
+                    const aboveResistance = bc?.resist ? s.price > bc.resist : false;
                     const rsiOk = bearRsi < 40;
                     const volOk = bearVol > 1.5;
-                    const allBearMet = priceNearSupport && rsiOk && volOk;
+                    const channelOk = bc?.width >= 5 && !channelInverted;
+                    const channelTag = channelInverted ? " INVERTED" : bc?.width < 5 ? " TOO TIGHT" : " \u2713";
+                    const channelColor = channelInverted ? "var(--red)" : channelOk ? "var(--green)" : "var(--dim)";
+                    const priceTag = supportBroken ? " BROKEN" : aboveResistance ? " BREAKOUT" : priceNearSupport ? " \u2713" : "";
+                    const priceColor = supportBroken ? "var(--red)" : aboveResistance ? "var(--yellow, #f0ad4e)" : priceNearSupport ? "var(--green)" : "var(--dim)";
+                    const allBearMet = priceNearSupport && rsiOk && volOk && channelOk;
                     return (
                       <div key={s.symbol} className={`${styles.signalCard} ${allBearMet ? styles.hot : styles.cold}`}>
                         <div className={styles.signalHeader}>
                           <span className={styles.ticker}>{s.symbol.replace("/USD", "")}</span>
                           <span className={`${styles.scoreTag} ${allBearMet ? styles.scoreHigh : styles.scoreLow}`}>
-                            {allBearMet ? "NEAR SUPPORT" : "WATCHING"}
+                            {channelInverted ? "CHANNEL INVERTED" : supportBroken ? "SUPPORT BROKEN" : aboveResistance ? "ABOVE RESISTANCE" : allBearMet ? "NEAR SUPPORT" : "WATCHING"}
                           </span>
                         </div>
                         <div className={styles.metrics}>
                           {[
                             { l: "PRICE", v: `$${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}` },
-                            { l: "SUPPORT", v: bc?.support ? `$${bc.support.toFixed(2)}` : "\u2014", color: priceNearSupport ? "var(--green)" : "var(--dim)", tag: priceNearSupport ? " \u2713" : "" },
+                            { l: "SUPPORT", v: bc?.support ? `$${bc.support.toFixed(2)}` : "\u2014", color: priceColor, tag: priceTag },
                             { l: "RSI (1h)", v: bearRsi != null ? Number(bearRsi).toFixed(1) : "\u2014", color: rsiOk ? "var(--green)" : "var(--dim)", tag: rsiOk ? " \u2713" : "" },
                             { l: "VOL (1h)", v: `\u00D7${Number(bearVol).toFixed(2)}`, color: volOk ? "var(--green)" : "var(--dim)", tag: volOk ? " \u2713" : "" },
-                            { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: bc?.width >= 5 ? "var(--green)" : "var(--dim)", tag: bc?.width >= 5 ? " \u2713" : "" },
+                            { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: channelColor, tag: bc?.width ? channelTag : "" },
                           ].map((m) => (
                             <div key={m.l} className={styles.metric}>
                               <span className={styles.metricLabel}>{m.l}</span>

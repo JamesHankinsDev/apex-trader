@@ -56,8 +56,12 @@ async function evaluateBearEntry1(signals, regime, coin) {
     return null;
   }
 
-  // CONDITION 3 — Price at or within 2% above a major support level
+  // CONDITION 3 — Price at or within 2% above a major support level (but NOT below — broken support = abort)
   const lowestClose = Math.min(...closes);
+  if (currentPrice < lowestClose) {
+    console.log(`[EXP1][BEAR] BELOW support — support broken at ${lowestClose.toFixed(2)}, price ${currentPrice.toFixed(2)}`);
+    return null;
+  }
   if (currentPrice > lowestClose * 1.02) {
     console.log(`[EXP1][BEAR] Price ${currentPrice.toFixed(2)} not near support ${lowestClose.toFixed(2)}`);
     return null;
