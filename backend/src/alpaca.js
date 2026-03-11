@@ -202,17 +202,35 @@ async function getCryptoBarsMulti(
     // Alpaca v1beta3 multi-symbol endpoint: `limit` is total bars across ALL symbols per page,
     // not per-symbol. Scale by symbol count so each symbol gets the requested number of bars.
     const totalLimit = limit * uncached.length;
-    const res = await axios.get(
-      `https://data.alpaca.markets/v1beta3/crypto/us/bars`,
-      {
-        params: { symbols: uncached.join(','), timeframe, limit: totalLimit, start },
-        headers: getHeaders(apiKey, secretKey),
-        timeout: 10000,
-      },
-    );
+    const headers = getHeaders(apiKey, secretKey);
+    const symbolsParam = uncached.join(',');
+
+    // Paginate to collect all bars (API may split across pages)
+    const allBarsRaw = {};  // symbol -> bar[]
+    let pageToken = undefined;
+    let pages = 0;
+
+    do {
+      const params = { symbols: symbolsParam, timeframe, limit: totalLimit, start };
+      if (pageToken) params.page_token = pageToken;
+
+      const res = await axios.get(
+        `https://data.alpaca.markets/v1beta3/crypto/us/bars`,
+        { params, headers, timeout: 10000 },
+      );
+
+      // Merge bars from this page
+      for (const [sym, bars] of Object.entries(res.data?.bars || {})) {
+        if (!allBarsRaw[sym]) allBarsRaw[sym] = [];
+        allBarsRaw[sym].push(...bars);
+      }
+
+      pageToken = res.data?.next_page_token || null;
+      pages++;
+    } while (pageToken && pages < 10);  // safety cap at 10 pages
 
     for (const sym of uncached) {
-      const rawBars = res.data?.bars?.[sym] || [];
+      const rawBars = allBarsRaw[sym] || [];
       // Take only the last `limit` bars per symbol (API may return more)
       const bars = formatBars(rawBars.slice(-limit));
       const cacheKey = `bars:${sym}:${timeframe}:${limit}`;

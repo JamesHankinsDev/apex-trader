@@ -277,7 +277,6 @@ export default function Dashboard() {
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch(`${API}/api/status`);
-      console.log({ res });
       if (res.ok) setStatus(await res.json());
     } catch {}
   }, []);

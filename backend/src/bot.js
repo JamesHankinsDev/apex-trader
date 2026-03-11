@@ -398,7 +398,7 @@ class TradingBot {
       [allBars, allPrices] = await Promise.all([
         alpaca.getCryptoBarsMulti(
           this.config.apiKey, this.config.secretKey,
-          scanWatchlist, '1Min', 30
+          scanWatchlist, '1Min', 50, 6 * 60 * 60 * 1000  // 6h lookback for sparse coins
         ),
         alpaca.getLatestCryptoPricesMulti(
           this.config.apiKey, this.config.secretKey,
