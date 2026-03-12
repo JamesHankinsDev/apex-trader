@@ -65,6 +65,10 @@ async function placeOrder(
   mode,
   { symbol, side, notional, qty },
 ) {
+  if (process.env.TRADING_ENABLED !== 'true') {
+    console.log(`[DRY RUN] Order blocked — TRADING_ENABLED is not true | ${side} ${symbol} ${notional ? '$' + notional : qty + ' units'}`);
+    return { id: 'dry-run', status: 'blocked', symbol, side };
+  }
   const body = {
     symbol: symbol.replace("/", ""),
     side,

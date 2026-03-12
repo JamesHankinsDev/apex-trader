@@ -2,5 +2,23 @@
   "startValue": 100,
   "wins": 0,
   "losses": 0,
-  "positions": {}
+  "positions": {
+    "AVAX/USD": {
+      "symbol": "AVAX/USD",
+      "orderId": "f971c8d2-ea4b-4410-b9eb-5e4c03e3ccad",
+      "entryPrice": 9.522,
+      "qty": 9.745885916,
+      "notional": 95,
+      "entryCost": 0.14250000000000002,
+      "entryTime": "2026-03-12T03:41:15.930Z",
+      "avg24h": 9.598259,
+      "deviation": -1.6,
+      "livePrice": 9.44473,
+      "trend": "falling",
+      "consecutiveDips": 3,
+      "rsi": 38.77,
+      "minuteROC": -0.33,
+      "volumeFading": false
+    }
+  }
 }
