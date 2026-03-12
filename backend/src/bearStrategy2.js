@@ -133,7 +133,7 @@ function clearTranches() {
  */
 function getBtcAccumulationStatus() {
   if (tranches.length === 0) {
-    return { active: false, tranches: 0, maxTranches: MAX_TRANCHES };
+    return { active: false, tranches: 0, maxTranches: MAX_TRANCHES, regimeFlipPrice };
   }
 
   const avgEntry = tranches.reduce((sum, t) => sum + t.entryPrice, 0) / tranches.length;

@@ -601,7 +601,7 @@ export default function Dashboard() {
             )}
             {!isBull && regime?.current === "bear" && (
               <span style={{ color: "#ff3355", fontWeight: 700 }}>
-                {"\u26A1"} Range Trading Active
+                {"\u26A1"} {activeTab === "experiment2" ? "BTC Accumulation Active" : "Range Trading Active"}
               </span>
             )}
             {!isBull && regime?.bearChannel?.support && (
@@ -1702,38 +1702,40 @@ export default function Dashboard() {
               ) : (
                 e2.signals.map((s) => {
                   const isBearMode = e2?.regime?.current === "bear";
-                  const bc = e2?.regime?.bearChannels?.[s.symbol] || e2?.regime?.bearChannel;
-                  const bearRsi = bc?.rsi ?? s.rsi;
-                  const bearVol = bc?.volRatio ?? s.volumeRatio ?? 1;
 
                   if (isBearMode) {
-                    const priceNearSupport = bc?.support ? s.price >= bc.support && s.price <= bc.support * 1.02 : false;
-                    const supportBroken = bc?.support ? s.price < bc.support : false;
-                    const channelInverted = bc?.support && bc?.resist ? bc.support > bc.resist : false;
-                    const aboveResistance = bc?.resist ? s.price > bc.resist : false;
-                    const rsiOk = bearRsi < 40;
-                    const volOk = bearVol > 1.5;
-                    const channelOk = bc?.width >= 5 && !channelInverted;
-                    const channelTag = channelInverted ? " INVERTED" : bc?.width < 5 ? " TOO TIGHT" : " \u2713";
-                    const channelColor = channelInverted ? "var(--red)" : channelOk ? "var(--green)" : "var(--dim)";
-                    const priceTag = supportBroken ? " BROKEN" : aboveResistance ? " BREAKOUT" : priceNearSupport ? " \u2713" : "";
-                    const priceColor = supportBroken ? "var(--red)" : aboveResistance ? "var(--yellow, #f0ad4e)" : priceNearSupport ? "var(--green)" : "var(--dim)";
-                    const allBearMet = priceNearSupport && rsiOk && volOk && channelOk;
+                    const acc = e2?.btcAccumulation || {};
+                    const flipPrice = acc.regimeFlipPrice || 0;
+                    const dropFromFlip = flipPrice > 0 ? ((flipPrice - s.price) / flipPrice * 100) : 0;
+                    const lastTranche = acc.trancheDetails?.length > 0 ? acc.trancheDetails[acc.trancheDetails.length - 1] : null;
+                    const dropFromLast = lastTranche ? ((lastTranche.entryPrice - s.price) / lastTranche.entryPrice * 100) : 0;
+                    const timeSinceLast = lastTranche ? ((Date.now() - new Date(lastTranche.timestamp).getTime()) / (1000 * 60 * 60)) : Infinity;
+                    const trancheCount = acc.tranches || 0;
+                    const maxTranches = acc.maxTranches || 4;
+
+                    // Entry conditions
+                    const dropOk = trancheCount === 0 ? dropFromFlip >= 5 : dropFromLast >= 4;
+                    const spacingOk = timeSinceLast >= 12;
+                    const tranchesAvail = trancheCount < maxTranches;
+                    const allMet = dropOk && spacingOk && tranchesAvail;
+
+                    const statusLabel = !tranchesAvail ? "MAX TRANCHES" : allMet ? "READY" : "WAITING";
                     return (
-                      <div key={s.symbol} className={`${styles.signalCard} ${allBearMet ? styles.hot : styles.cold}`}>
+                      <div key={s.symbol} className={`${styles.signalCard} ${allMet ? styles.hot : styles.cold}`}>
                         <div className={styles.signalHeader}>
                           <span className={styles.ticker}>{s.symbol.replace("/USD", "")}</span>
-                          <span className={`${styles.scoreTag} ${allBearMet ? styles.scoreHigh : styles.scoreLow}`}>
-                            {channelInverted ? "CHANNEL INVERTED" : supportBroken ? "SUPPORT BROKEN" : aboveResistance ? "ABOVE RESISTANCE" : allBearMet ? "NEAR SUPPORT" : "WATCHING"}
+                          <span className={`${styles.scoreTag} ${allMet ? styles.scoreHigh : !tranchesAvail ? styles.scoreHigh : styles.scoreLow}`} style={!tranchesAvail ? { background: "rgba(255,255,255,0.08)" } : undefined}>
+                            {statusLabel}
                           </span>
                         </div>
                         <div className={styles.metrics}>
                           {[
                             { l: "PRICE", v: `$${s.price < 1 ? s.price?.toFixed(4) : s.price?.toFixed(2)}` },
-                            { l: "SUP / RES", v: `${bc?.support ? "$" + bc.support.toFixed(2) : "\u2014"} / ${bc?.resist ? "$" + bc.resist.toFixed(2) : "\u2014"}`, color: supportBroken ? "var(--red)" : aboveResistance ? "var(--yellow, #f0ad4e)" : priceNearSupport ? "var(--green)" : "var(--dim)", tag: supportBroken ? " BROKEN" : aboveResistance ? " BREAKOUT" : priceNearSupport ? " \u2713" : "" },
-                            { l: "RSI (1h)", v: bearRsi != null ? Number(bearRsi).toFixed(1) : "\u2014", color: rsiOk ? "var(--green)" : "var(--dim)", tag: rsiOk ? " \u2713" : "" },
-                            { l: "VOL (1h)", v: `\u00D7${Number(bearVol).toFixed(2)}`, color: volOk ? "var(--green)" : "var(--dim)", tag: volOk ? " \u2713" : "" },
-                            { l: "CHANNEL", v: bc?.width ? `${bc.width}%` : "\u2014", color: channelColor, tag: bc?.width ? channelTag : "" },
+                            { l: "FLIP PRICE", v: flipPrice > 0 ? `$${flipPrice.toFixed(2)}` : "\u2014", color: "var(--dim)" },
+                            { l: "DROP", v: `${dropFromFlip.toFixed(1)}%`, color: (trancheCount === 0 ? dropFromFlip >= 5 : dropFromLast >= 4) ? "var(--green)" : "var(--dim)", tag: (trancheCount === 0 ? dropFromFlip >= 5 : dropFromLast >= 4) ? " \u2713" : ` (need ${trancheCount === 0 ? "5" : "4"}%)` },
+                            { l: "TRANCHES", v: `${trancheCount} / ${maxTranches}`, color: tranchesAvail ? "var(--green)" : "var(--yellow, #f0ad4e)", tag: !tranchesAvail ? " FULL" : "" },
+                            { l: "SPACING", v: timeSinceLast === Infinity ? "\u2014" : `${timeSinceLast.toFixed(1)}h`, color: spacingOk ? "var(--green)" : "var(--dim)", tag: spacingOk ? " \u2713" : " (need 12h)" },
+                            ...(acc.avgEntry ? [{ l: "AVG ENTRY", v: `$${acc.avgEntry.toFixed(2)}`, color: s.price >= acc.avgEntry ? "var(--green)" : "var(--red)" }] : []),
                           ].map((m) => (
                             <div key={m.l} className={styles.metric}>
                               <span className={styles.metricLabel}>{m.l}</span>
@@ -1741,9 +1743,6 @@ export default function Dashboard() {
                             </div>
                           ))}
                         </div>
-                        {s.reasons?.length > 0 && (
-                          <div className={styles.reasons}>{s.reasons.join(" · ")}</div>
-                        )}
                       </div>
                     );
                   }
@@ -1851,7 +1850,7 @@ export default function Dashboard() {
               {/* Bear signal indicator */}
               {e2?.regime?.current === "bear" && e2?.lastBearSignal && (
                 <div style={{ padding: "8px 12px", margin: "6px 0", background: "rgba(255,51,85,0.08)", border: "1px solid rgba(255,51,85,0.2)", borderRadius: 6, fontSize: 11, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
-                  Last Range Trade: {e2.lastBearSignal.coin?.replace("/USD", "")} | Entry: {fmt$(e2.lastBearSignal.entryPrice)} | TP: {fmt$(e2.lastBearSignal.tpPrice)} | {fmtTime(e2.lastBearSignal.time)}
+                  Last BTC Tranche: {e2.lastBearSignal.coin?.replace("/USD", "")} | Entry: {fmt$(e2.lastBearSignal.entryPrice)} | {fmtTime(e2.lastBearSignal.time)}
                 </div>
               )}
             </div>
@@ -1899,11 +1898,10 @@ export default function Dashboard() {
                 const borderTint = isBear ? "rgba(255,51,85,0.2)" : "rgba(0,255,136,0.2)";
 
                 const entryRows = isBear ? [
-                  { label: "Price Near Support", value: "≤ 2% above support" },
-                  { label: "RSI (1h)", value: "< 40 (oversold)" },
-                  { label: "Volume", value: "> 1.5x average" },
-                  { label: "Channel Width", value: "> 5%" },
-                  { label: "Channel", value: "Descending" },
+                  { label: "Regime Flip Drop", value: "≥ 5% below flip price" },
+                  { label: "Subsequent Drop", value: "≥ 4% below prev tranche" },
+                  { label: "Tranche Spacing", value: "≥ 12h between tranches" },
+                  { label: "Max Tranches", value: "4 (22% balance each)" },
                 ] : [
                   { label: "20-Bar Breakout", value: "Price > 20-bar high" },
                   { label: "Volume", value: "> 1.5x average" },
@@ -1912,10 +1910,8 @@ export default function Dashboard() {
                 ];
 
                 const exitRows = isBear ? [
-                  { label: "Take Profit", value: "80% of channel width" },
-                  { label: "Stop Loss", value: "3% below support" },
-                  { label: "Max Hold", value: "48h" },
-                  { label: "Cooldown", value: "8h after stop loss" },
+                  { label: "Gate Reopen", value: "Sell all on bull flip" },
+                  { label: "Emergency Stop", value: "Any tranche down 20%" },
                 ] : [
                   { label: "Trailing Stop", value: `${(e2?.config?.trailingStopPct || 0.15) * 100}% from high` },
                   { label: "Hard Stop", value: `-${(e2?.config?.hardStopPct || 0.20) * 100}%` },
@@ -1929,7 +1925,7 @@ export default function Dashboard() {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
                       <span style={{ fontSize: 12 }}>{isBear ? "\uD83D\uDD34" : "\uD83D\uDFE2"}</span>
                       <span style={{ color: accentColor, fontWeight: 700, fontSize: 11, letterSpacing: 1 }}>
-                        {isBear ? "BEAR MODE — Range Trading" : "BULL MODE — Momentum Breakout"}
+                        {isBear ? "BEAR MODE — BTC Accumulation" : "BULL MODE — Momentum Breakout"}
                       </span>
                     </div>
 
