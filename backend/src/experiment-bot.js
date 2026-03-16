@@ -5,7 +5,7 @@ const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluate } = require('./mean-reversion-strategy');
 const cryptoStream = require('./crypto-stream');
-const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
+const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { evaluateBearEntry1 } = require('./bearStrategy1');
 const { setBearCooldown } = require('./bearStrategy');
 const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
@@ -275,6 +275,18 @@ class ExperimentBot {
     const isBear = !gate.open;
     const entryWatchlist = isBear && this.config.bearWatchlist
       ? this.config.bearWatchlist : this.config.watchlist;
+
+    // Phase 1: log detailed regime at each scan (observation only)
+    try {
+      const detailed = await getDetailedRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
+      console.log(`[EXP1][REGIME] ${detailed.label} | ADX ${detailed.signals.adx} RSI ${detailed.signals.rsi} F&G ${detailed.signals.fng} Gap ${detailed.signals.gapPct}%`);
+      if (this._lastDetailedRegime && this._lastDetailedRegime !== detailed.state) {
+        this.addEvent('info', `[REGIME] Transition: ${this._lastDetailedRegime} → ${detailed.state} (${detailed.label})`);
+      }
+      this._lastDetailedRegime = detailed.state;
+    } catch (err) {
+      console.log(`[EXP1][REGIME] fetch failed: ${err.message}`);
+    }
 
     // Merge with open position symbols so exits are always monitored
     const openSymbols = Object.keys(this.state.positions);

@@ -6,7 +6,7 @@ const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
 const BenchmarkTracker = require('./benchmark');
 const benchmark = new BenchmarkTracker();
 const cryptoStream = require('./crypto-stream');
-const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
+const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { evaluateBearEntry, setBearCooldown } = require('./bearStrategy');
 const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
 
@@ -392,6 +392,18 @@ class TradingBot {
     const isBear = !gate.open;
     const entryWatchlist = isBear && this.config.bearWatchlist
       ? this.config.bearWatchlist : this.config.watchlist;
+
+    // Phase 1: log detailed regime at each scan (observation only)
+    try {
+      const detailed = await getDetailedRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
+      console.log(`[MAIN][REGIME] ${detailed.label} | ADX ${detailed.signals.adx} RSI ${detailed.signals.rsi} F&G ${detailed.signals.fng} Gap ${detailed.signals.gapPct}%`);
+      if (this._lastDetailedRegime && this._lastDetailedRegime !== detailed.state) {
+        this.addEvent('info', `[REGIME] Transition: ${this._lastDetailedRegime} → ${detailed.state} (${detailed.label})`);
+      }
+      this._lastDetailedRegime = detailed.state;
+    } catch (err) {
+      console.log(`[MAIN][REGIME] fetch failed: ${err.message}`);
+    }
 
     // Merge with open position symbols so exits are always monitored
     const openSymbols = Object.keys(this.state.positions);

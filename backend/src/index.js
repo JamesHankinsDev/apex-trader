@@ -5,7 +5,7 @@ const cors = require('cors');
 const bot = require('./bot');
 const experimentBot = require('./experiment-bot');
 const experiment2Bot = require('./experiment2-bot');
-const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
+const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { getChannelData } = require('./bearStrategy');
 const { getPerformanceStats, getWeeklySnapshots } = require('./performance');
 const alpaca = require('./alpaca');
@@ -45,10 +45,11 @@ async function getSharedMarketData() {
   if (!apiKey || !secretKey) return null;
 
   try {
-    const [gate, regime, liveBtc] = await Promise.all([
+    const [gate, regime, liveBtc, detailedRegime] = await Promise.all([
       isBtcGateOpen(apiKey, secretKey, streamHandle),
       getMarketRegime(apiKey, secretKey, streamHandle),
       alpaca.getLatestCryptoPrice(apiKey, secretKey, 'BTC/USD', streamHandle),
+      getDetailedRegime(apiKey, secretKey, streamHandle),
     ]);
 
     let bearChannel = null;
@@ -77,7 +78,7 @@ async function getSharedMarketData() {
       }
     }
 
-    sharedMarketData = { gate, regime, liveBtc, bearChannel, bearChannels };
+    sharedMarketData = { gate, regime, liveBtc, bearChannel, bearChannels, detailedRegime };
     sharedMarketDataFetchedAt = Date.now();
     return sharedMarketData;
   } catch {
@@ -87,7 +88,7 @@ async function getSharedMarketData() {
 
 function attachMarketData(status, market) {
   if (!market) return;
-  const { gate, regime, liveBtc, bearChannel, bearChannels } = market;
+  const { gate, regime, liveBtc, bearChannel, bearChannels, detailedRegime } = market;
   status.btcGate = gate;
   status.regime = {
     current: regime.regime,
@@ -99,6 +100,7 @@ function attachMarketData(status, market) {
   };
   if (bearChannel) status.regime.bearChannel = bearChannel;
   if (bearChannels) status.regime.bearChannels = bearChannels;
+  if (detailedRegime) status.regime.detailed = detailedRegime;
 }
 
 // ─── BOT STATUS ───────────────────────────────────────────────

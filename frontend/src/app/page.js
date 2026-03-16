@@ -605,7 +605,10 @@ export default function Dashboard() {
       <div className={styles.tabBar}>
         {(() => {
           const r = status?.regime || expStatus?.regime || exp2Status?.regime;
-          const badge = r ? (r.current === "bear" ? " \uD83D\uDD34 BEAR" : " \uD83D\uDFE2 BULL") : "";
+          const drLabel = r?.detailed?.label;
+          const badge = r ? (r.current === "bear"
+            ? ` \uD83D\uDD34 ${drLabel || "BEAR"}`
+            : ` \uD83D\uDFE2 ${drLabel || "BULL"}`) : "";
           return <>
             <button className={activeTab === "main" ? styles.tabActive : styles.tab} onClick={() => setActiveTab("main")}>
               Main Bot (Momentum){badge}
@@ -627,6 +630,13 @@ export default function Dashboard() {
         if (!gate) return null;
         const isBull = gate.open;
         const fg = regime?.fearGreed;
+        const dr = regime?.detailed; // Phase 1: 8-state detailed regime
+        const regimeColors = {
+          BULL_TRENDING: "#00ff88", BULL_WEAKENING: "#88cc44", BULL_PULLBACK: "#ccaa00",
+          BEAR_RALLY: "#ccaa00", BEAR_TRENDING: "#ff3355", BEAR_EXHAUSTED: "#ff6680",
+          CAPITULATION: "#ff0033", FLAT: "#888",
+        };
+        const drColor = dr ? (regimeColors[dr.state] || "#888") : "#888";
         return (
           <div style={{
             display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
@@ -639,14 +649,28 @@ export default function Dashboard() {
             <span style={{ color: isBull ? "#00ff88" : "#ff3355", fontWeight: 600 }}>
               BTC Gate {isBull ? "Open" : "Closed"}
             </span>
+            {dr && (
+              <span style={{
+                color: drColor, fontWeight: 700,
+                background: "rgba(0,0,0,0.3)", padding: "2px 8px", borderRadius: 4,
+                border: `1px solid ${drColor}44`,
+              }}>
+                {dr.label}
+              </span>
+            )}
             {fg && (
               <span style={{ color: fg.value < 20 ? "#ff3355" : fg.value > 60 ? "#00ff88" : "var(--yellow)" }}>
-                | Fear & Greed: {fg.value} ({fg.label})
+                | F&G: {fg.value} ({fg.label})
+              </span>
+            )}
+            {dr?.signals && (
+              <span style={{ color: "#999", fontSize: 11 }}>
+                | ADX {dr.signals.adx} | RSI {dr.signals.rsi} | Gap {dr.signals.gapPct}%
               </span>
             )}
             {!isBull && regime?.current === "bear" && (
               <span style={{ color: "#ff3355", fontWeight: 700 }}>
-                {"\u26A1"} {activeTab === "experiment2" ? "BTC Accumulation Active" : "Range Trading Active"}
+                | {activeTab === "experiment2" ? "BTC Accumulation Active" : "Range Trading Active"}
               </span>
             )}
             {!isBull && regime?.bearChannel?.support && (
