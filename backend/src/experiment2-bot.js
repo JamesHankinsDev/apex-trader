@@ -299,6 +299,7 @@ class Experiment2Bot {
         this.addEvent('info', `[REGIME] Transition: ${this._lastDetailedRegime} → ${detailed.state} (${detailed.label})`);
       }
       this._lastDetailedRegime = detailed.state;
+      this._currentDetailedRegime = detailed; // Phase 2: full object for entry logic
     } catch (err) {
       console.log(`[EXP2][REGIME] fetch failed: ${err.message}`);
     }
@@ -404,25 +405,37 @@ class Experiment2Bot {
         this._lastGateOpen = false;
       }
 
-      // Bear mode: BTC DCA accumulation (only on bear watchlist coins)
-      const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
-      if (regime.regime === 'bear') {
-        // Get current BTC price
-        const btcPrice = await alpaca.getLatestCryptoPrice(
-          this.config.apiKey, this.config.secretKey, 'BTC/USD', this.streamHandle
-        );
-        if (btcPrice && btcPrice > 0) {
-          // Check tranche exit conditions (emergency stop)
-          const exitSignal = checkTrancheExit(btcPrice, false);
-          if (exitSignal) {
-            // Exit all BTC positions
-            await this.exitAllBtcTranches(btcPrice, exitSignal.reason);
-          } else {
-            // Try to deploy a new tranche
-            const accStatus = getBtcAccumulationStatus();
-            const bearSignal = evaluateBearEntry2(regime, btcPrice, accStatus.trancheDetails || []);
-            if (bearSignal) {
-              await this.executeBtcTranche(btcPrice, bearSignal);
+      const detailedState = this._currentDetailedRegime?.state;
+
+      // FLAT: no directional edge — sit out
+      // BEAR_RALLY: Exp2 stays in BTC accumulation mode, not spot rally trades
+      if (detailedState === 'FLAT' || detailedState === 'BEAR_RALLY') {
+        // sit out — no new tranches; hold existing positions
+
+      // Bear mode: BTC DCA accumulation with regime-aware thresholds
+      } else {
+        const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
+        if (regime.regime === 'bear') {
+          const btcPrice = await alpaca.getLatestCryptoPrice(
+            this.config.apiKey, this.config.secretKey, 'BTC/USD', this.streamHandle
+          );
+          if (btcPrice && btcPrice > 0) {
+            const exitSignal = checkTrancheExit(btcPrice, false);
+            if (exitSignal) {
+              await this.exitAllBtcTranches(btcPrice, exitSignal.reason);
+            } else {
+              const accStatus = getBtcAccumulationStatus();
+              // CAPITULATION: deploy immediately — skip price drop conditions
+              // BEAR_EXHAUSTED: reduce drop thresholds (3%/2% instead of 5%/4%)
+              // BEAR_TRENDING: standard conditions
+              const trancheOpts =
+                detailedState === 'CAPITULATION'  ? { forceEntry: true } :
+                detailedState === 'BEAR_EXHAUSTED' ? { firstDropPct: 0.03, subsequentDropPct: 0.02 } :
+                {};
+              const bearSignal = evaluateBearEntry2(regime, btcPrice, accStatus.trancheDetails || [], trancheOpts);
+              if (bearSignal) {
+                await this.executeBtcTranche(btcPrice, bearSignal);
+              }
             }
           }
         }
@@ -446,6 +459,14 @@ class Experiment2Bot {
         this.addEvent('success', `[BTC GATE] Open — BTC $${gate.btcPrice} above 50-SMA $${gate.sma50} — switching to BULL mode`);
         this._lastGateOpen = true;
       }
+
+      // Phase 2: regime-aware entry sizing
+      const regime2 = this._currentDetailedRegime?.state;
+      const regimeLabel = this._currentDetailedRegime?.label;
+      // BULL_WEAKENING: 50% size — reduced conviction in fading trend
+      // BULL_PULLBACK: full size — best risk/reward entry in bull cycle
+      const sizeFactor = regime2 === 'BULL_WEAKENING' ? 0.5 : 1.0;
+
       // Bull mode — entry: only on bull watchlist coins, 1 position at a time
       const entrySet = new Set(entryWatchlist);
       const openCount = Object.keys(this.state.positions).length;
@@ -462,7 +483,7 @@ class Experiment2Bot {
             continue;
           }
 
-          await this.executeEntry(sig);
+          await this.executeEntry(sig, { sizeFactor, regimeLabel });
           break; // Only one entry per scan
         }
       }
@@ -495,10 +516,11 @@ class Experiment2Bot {
 
   // ─── ENTRY ──────────────────────────────────────────────────
 
-  async executeEntry(signal) {
+  async executeEntry(signal, opts = {}) {
     const { symbol, price } = signal;
+    const sizeFactor = opts.sizeFactor || 1.0;
     const notional = Math.min(
-      this.state.portfolioValue * this.config.positionSize,
+      this.state.portfolioValue * this.config.positionSize * sizeFactor,
       this.state.cashBalance
     );
     if (notional < 1) return;
@@ -547,8 +569,10 @@ class Experiment2Bot {
         },
       };
 
+      const regimeTag = opts.regimeLabel ? ` [${opts.regimeLabel}]` : '';
+      const sizeLabel = sizeFactor < 1 ? ` (${(this.config.positionSize * sizeFactor * 100).toFixed(0)}% size)` : '';
       this.addEvent('success',
-        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.reasons.join(' · ')} | SL $${hardStop.toFixed(2)} | TP $${takeProfit.toFixed(2)}`
+        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.reasons.join(' · ')} | SL $${hardStop.toFixed(2)} | TP $${takeProfit.toFixed(2)}${sizeLabel}${regimeTag}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {

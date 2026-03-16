@@ -284,6 +284,7 @@ class ExperimentBot {
         this.addEvent('info', `[REGIME] Transition: ${this._lastDetailedRegime} → ${detailed.state} (${detailed.label})`);
       }
       this._lastDetailedRegime = detailed.state;
+      this._currentDetailedRegime = detailed; // Phase 2: full object for entry logic
     } catch (err) {
       console.log(`[EXP1][REGIME] fetch failed: ${err.message}`);
     }
@@ -396,20 +397,37 @@ class ExperimentBot {
         this._lastGateOpen = false;
       }
 
-      // Bear mode: try dead cat bounce entries (only on bear watchlist coins)
-      const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
-      if (regime.regime === 'bear') {
-        const entrySet = new Set(entryWatchlist);
-        let openCount = Object.keys(this.state.positions).length;
-        for (const sig of signals) {
-          if (openCount >= this.config.maxPositions) break;
-          if (!entrySet.has(sig.symbol)) continue;
-          if (this.state.positions[sig.symbol]) continue;
+      const detailedState = this._currentDetailedRegime?.state;
+      const regimeLabel = this._currentDetailedRegime?.label;
 
-          const bearSignal = await evaluateBearEntry1(sig, regime, sig.symbol);
-          if (bearSignal) {
-            await this.executeBearEntry(bearSignal, sig);
-            openCount++;
+      // FLAT: no edge
+      if (detailedState === 'FLAT') {
+        // sit out — no entries
+
+      // BEAR_RALLY: Exp1 sits out — dead cat bounce needs exhaustion, not active rally
+      } else if (detailedState === 'BEAR_RALLY') {
+        this.addEvent('info', `[EXP1][REGIME] ${regimeLabel} — sitting out. Dead cat bounce needs exhaustion, not an active rally.`);
+
+      // BEAR_EXHAUSTED: sit out — wait for higher conviction (5-condition dead cat setup)
+      } else if (detailedState === 'BEAR_EXHAUSTED') {
+        this.addEvent('info', `[EXP1][REGIME] ${regimeLabel} — sitting out. Waiting for all dead cat conditions to align.`);
+
+      // CAPITULATION / BEAR_TRENDING: dead cat bounce entries — all conditions checked by evaluateBearEntry1
+      } else {
+        const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
+        if (regime.regime === 'bear') {
+          const entrySet = new Set(entryWatchlist);
+          let openCount = Object.keys(this.state.positions).length;
+          for (const sig of signals) {
+            if (openCount >= this.config.maxPositions) break;
+            if (!entrySet.has(sig.symbol)) continue;
+            if (this.state.positions[sig.symbol]) continue;
+
+            const bearSignal = await evaluateBearEntry1(sig, regime, sig.symbol);
+            if (bearSignal) {
+              await this.executeBearEntry(bearSignal, sig);
+              openCount++;
+            }
           }
         }
       }
@@ -418,17 +436,28 @@ class ExperimentBot {
         this.addEvent('success', `[BTC GATE] Open — BTC $${gate.btcPrice} above 50-SMA $${gate.sma50} — switching to BULL mode`);
         this._lastGateOpen = true;
       }
-      // Bull mode — buy dips (only on bull watchlist coins)
-      const entrySet = new Set(entryWatchlist);
-      let openCount = Object.keys(this.state.positions).length;
-      for (const sig of signals) {
-        if (openCount >= this.config.maxPositions) break;
-        if (!entrySet.has(sig.symbol)) continue;
-        if (sig.signal !== 'buy') continue;
-        if (this.state.positions[sig.symbol]) continue;
 
-        await this.executeEntry(sig);
-        openCount++;
+      // Phase 2: regime-aware entry logic
+      const regime2 = this._currentDetailedRegime?.state;
+      const regimeLabel = this._currentDetailedRegime?.label;
+
+      // BULL_WEAKENING: Exp1 sits out — mean reversion needs momentum to work
+      if (regime2 === 'BULL_WEAKENING') {
+        this.addEvent('info', `[EXP1][REGIME] ${regimeLabel} — sitting out (no edge for mean reversion in weakening trend)`);
+      } else {
+        // Bull mode — buy dips (only on bull watchlist coins)
+        // BULL_PULLBACK: normal behavior (mean reversion is already buy-the-dip)
+        const entrySet = new Set(entryWatchlist);
+        let openCount = Object.keys(this.state.positions).length;
+        for (const sig of signals) {
+          if (openCount >= this.config.maxPositions) break;
+          if (!entrySet.has(sig.symbol)) continue;
+          if (sig.signal !== 'buy') continue;
+          if (this.state.positions[sig.symbol]) continue;
+
+          await this.executeEntry(sig, { regimeLabel });
+          openCount++;
+        }
       }
     }
 
@@ -459,7 +488,7 @@ class ExperimentBot {
 
   // ─── ENTRY ──────────────────────────────────────────────────
 
-  async executeEntry(signal) {
+  async executeEntry(signal, opts = {}) {
     const { symbol, price } = signal;
     const targetNotional = this.state.portfolioValue * this.config.positionSize;
     const notional = Math.min(targetNotional, this.state.cashBalance);
@@ -498,8 +527,9 @@ class ExperimentBot {
         deviation: signal.deviation,
       };
 
+      const regimeTag = opts.regimeLabel ? ` [${opts.regimeLabel}]` : '';
       this.addEvent('success',
-        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.deviation.toFixed(2)}% below avg | RSI ${signal.rsi} | ${signal.reasons.join(' · ')}`
+        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.deviation.toFixed(2)}% below avg | RSI ${signal.rsi} | ${signal.reasons.join(' · ')}${regimeTag}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {

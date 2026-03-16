@@ -20,7 +20,7 @@ let regimeFlipPrice = null; // BTC price when regime first flipped to bear
  * @param {Array} existingTranches - Current tranche array (passed for status)
  * @returns {object|null} Entry signal or null
  */
-function evaluateBearEntry2(regime, currentBtcPrice, existingTranches) {
+function evaluateBearEntry2(regime, currentBtcPrice, existingTranches, opts = {}) {
   // Set regime flip price on first bear cycle
   if (regimeFlipPrice === null) {
     regimeFlipPrice = currentBtcPrice;
@@ -30,6 +30,18 @@ function evaluateBearEntry2(regime, currentBtcPrice, existingTranches) {
   // Max 4 tranches
   if (tranches.length >= MAX_TRANCHES) {
     return null;
+  }
+
+  // CAPITULATION: skip spacing and price conditions — deploy immediately
+  if (opts.forceEntry) {
+    console.log(`[EXP2][BEAR] CAPITULATION — force-deploying tranche ${tranches.length + 1}/4`);
+    return {
+      entry: true,
+      type: 'btc_dca_accumulation',
+      trancheIndex: tranches.length,
+      tranchePct: TRANCHE_PCT,
+      regime: 'capitulation',
+    };
   }
 
   // Check spacing: last tranche must be > 12h ago
@@ -43,20 +55,24 @@ function evaluateBearEntry2(regime, currentBtcPrice, existingTranches) {
     }
   }
 
+  // Allow caller to reduce thresholds (BEAR_EXHAUSTED: 3%/2% instead of 5%/4%)
+  const firstDropPct = opts.firstDropPct ?? FIRST_DROP_PCT;
+  const subsequentDropPct = opts.subsequentDropPct ?? SUBSEQUENT_DROP_PCT;
+
   // Check price conditions
   if (tranches.length === 0) {
-    // First tranche: BTC must drop > 5% from regime flip price
+    // First tranche: BTC must drop enough from regime flip price
     const dropPct = (regimeFlipPrice - currentBtcPrice) / regimeFlipPrice;
-    if (dropPct < FIRST_DROP_PCT) {
-      console.log(`[EXP2][BEAR] BTC drop ${(dropPct * 100).toFixed(1)}% — needs ${(FIRST_DROP_PCT * 100)}% from regime flip`);
+    if (dropPct < firstDropPct) {
+      console.log(`[EXP2][BEAR] BTC drop ${(dropPct * 100).toFixed(1)}% — needs ${(firstDropPct * 100).toFixed(0)}% from regime flip`);
       return null;
     }
   } else {
-    // Subsequent tranches: BTC must drop additional 4% below previous entry
+    // Subsequent tranches: BTC must drop enough below previous entry
     const prevEntry = tranches[tranches.length - 1].entryPrice;
     const dropFromPrev = (prevEntry - currentBtcPrice) / prevEntry;
-    if (dropFromPrev < SUBSEQUENT_DROP_PCT) {
-      console.log(`[EXP2][BEAR] BTC drop ${(dropFromPrev * 100).toFixed(1)}% from last tranche — needs ${(SUBSEQUENT_DROP_PCT * 100)}%`);
+    if (dropFromPrev < subsequentDropPct) {
+      console.log(`[EXP2][BEAR] BTC drop ${(dropFromPrev * 100).toFixed(1)}% from last tranche — needs ${(subsequentDropPct * 100).toFixed(0)}%`);
       return null;
     }
   }

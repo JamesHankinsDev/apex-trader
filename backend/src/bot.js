@@ -389,6 +389,7 @@ class TradingBot {
 
     // Determine regime first to select the right watchlist (cached, essentially free)
     const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
+    this._lastBtcPrice = gate.btcPrice; // Phase 3: used for bear rally BTC hard stop
     const isBear = !gate.open;
     const entryWatchlist = isBear && this.config.bearWatchlist
       ? this.config.bearWatchlist : this.config.watchlist;
@@ -401,6 +402,7 @@ class TradingBot {
         this.addEvent('info', `[REGIME] Transition: ${this._lastDetailedRegime} → ${detailed.state} (${detailed.label})`);
       }
       this._lastDetailedRegime = detailed.state;
+      this._currentDetailedRegime = detailed; // Phase 2: full object for entry logic
     } catch (err) {
       console.log(`[MAIN][REGIME] fetch failed: ${err.message}`);
     }
@@ -462,6 +464,10 @@ class TradingBot {
           signal.high = lastBar.h;
           signal.low = lastBar.l;
           signal.close = lastBar.c;
+          // 6h price change proxy (for bear rally coin check)
+          signal.sixHourChange = bars.length > 1
+            ? (signal.price - bars[0].c) / bars[0].c * 100
+            : 0;
         }
 
         signals.push(signal);
@@ -495,32 +501,76 @@ class TradingBot {
           this._lastGateOpen = false;
         }
 
-        // Bear mode: try channel range trade entries (only on bear watchlist coins)
-        const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
-        if (regime.regime === 'bear') {
-          const entrySet = new Set(entryWatchlist);
-          let openCount = Object.keys(this.state.positions).length;
-          for (const candidate of signals) {
-            if (openCount >= this.config.maxPositions) break;
-            if (!entrySet.has(candidate.symbol)) continue;
-            if (candidate.price <= 0) continue;
-            if (this.state.positions[candidate.symbol]) continue;
-            if (candidate.stale) continue;
+        const detailedState = this._currentDetailedRegime?.state;
 
-            const bearSignal = await evaluateBearEntry(candidate, regime, candidate.symbol, {
-              apiKey: this.config.apiKey,
-              secretKey: this.config.secretKey,
-            });
-            if (bearSignal) {
-              // Momentum bot: require green candle confirmation
-              const lastBar = candidate;
-              if (lastBar.close <= lastBar.open) {
-                this.addEvent('info', `[MAIN][BEAR] Skipping ${candidate.symbol} — candle not green`);
-                continue;
-              }
-              this.addEvent('info', '[MAIN][BEAR] Range entry confirmed with green candle');
-              await this.executeBearEntry(bearSignal, candidate);
+        // FLAT: no directional edge — sit out entirely
+        if (detailedState === 'FLAT') {
+          // No entries; regime transition event already logged above
+
+        // CAPITULATION: Main sits out — too volatile, no edge for momentum bot
+        } else if (detailedState === 'CAPITULATION') {
+          this.addEvent('info', '[MAIN][REGIME] Capitulation — sitting out. No entries during panic conditions.');
+
+        // BEAR_RALLY: micro-strategy — 25% size, 5% TP, BTC hard stop, max 1 position
+        } else if (detailedState === 'BEAR_RALLY') {
+          const bearRallyPositions = Object.values(this.state.positions).filter(p => p.bearRally);
+          if (bearRallyPositions.length === 0) {
+            const entrySet = new Set(entryWatchlist);
+            let openCount = Object.keys(this.state.positions).length;
+            for (const candidate of signals) {
+              if (openCount >= this.config.maxPositions) break;
+              if (!entrySet.has(candidate.symbol)) continue;
+              if (candidate.price <= 0 || candidate.stale) continue;
+              if (this.state.positions[candidate.symbol]) continue;
+              // Coin conditions: RSI 45–65, volume >2x, 6h gain >2%, BTC still >3% below SMA
+              if (candidate.rsi < 45 || candidate.rsi > 65) continue;
+              if ((candidate.volumeRatio || 0) < 2.0) continue;
+              if ((candidate.sixHourChange || 0) < 2.0) continue;
+              if ((this._currentDetailedRegime?.signals?.gapPct || -5) > -3) continue;
+              this.addEvent('info',
+                `[MAIN][BEAR_RALLY] Micro-entry: ${candidate.symbol} | RSI ${candidate.rsi.toFixed(0)} Vol ×${(candidate.volumeRatio || 0).toFixed(1)} 6h +${(candidate.sixHourChange || 0).toFixed(1)}%`
+              );
+              await this.executeEntry(candidate, {
+                sizeFactor: 0.25,
+                takeProfitPct: 0.05,
+                regimeLabel: 'Bear Rally',
+                bearRally: true,
+                btcRallyHigh: gate.btcPrice,
+                maxHoldHours: 24,
+              });
               openCount++;
+              break; // Max 1 bear rally position
+            }
+          }
+
+        // BEAR_EXHAUSTED: 50% size on range entries — reduced conviction
+        // BEAR_TRENDING: full size range entries
+        } else {
+          const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
+          if (regime.regime === 'bear') {
+            const bearSizeFactor = detailedState === 'BEAR_EXHAUSTED' ? 0.5 : 1.0;
+            const entrySet = new Set(entryWatchlist);
+            let openCount = Object.keys(this.state.positions).length;
+            for (const candidate of signals) {
+              if (openCount >= this.config.maxPositions) break;
+              if (!entrySet.has(candidate.symbol)) continue;
+              if (candidate.price <= 0) continue;
+              if (this.state.positions[candidate.symbol]) continue;
+              if (candidate.stale) continue;
+
+              const bearSignal = await evaluateBearEntry(candidate, regime, candidate.symbol, {
+                apiKey: this.config.apiKey,
+                secretKey: this.config.secretKey,
+              });
+              if (bearSignal) {
+                // Momentum bot: require green candle confirmation
+                if (candidate.close <= candidate.open) {
+                  this.addEvent('info', `[MAIN][BEAR] Skipping ${candidate.symbol} — candle not green`);
+                  continue;
+                }
+                await this.executeBearEntry(bearSignal, candidate, { sizeFactor: bearSizeFactor });
+                openCount++;
+              }
             }
           }
         }
@@ -530,6 +580,20 @@ class TradingBot {
         this.addEvent('success', `[BTC GATE] Open — BTC $${gate.btcPrice} above 50-SMA $${gate.sma50} — switching to BULL mode`);
         this._lastGateOpen = true;
       }
+
+      // Phase 2: regime-aware entry sizing and thresholds
+      const regime2 = this._currentDetailedRegime?.state;
+      const isBullWeakening = regime2 === 'BULL_WEAKENING';
+      const isBullPullback  = regime2 === 'BULL_PULLBACK';
+      // BULL_PULLBACK: lower score threshold — be more aggressive on dips
+      const effectiveThreshold = isBullPullback
+        ? Math.max(55, this.config.entryScoreThreshold - 10)
+        : this.config.entryScoreThreshold;
+      // BULL_WEAKENING: 50% size, tighter stops
+      const sizeFactor  = isBullWeakening ? 0.5 : 1.0;
+      const tightStops  = isBullWeakening;
+      const regimeLabel = this._currentDetailedRegime?.label;
+
       // Bull mode — entry logic (only on bull watchlist coins)
       const bullEntrySet = new Set(entryWatchlist);
       let openCount = Object.keys(this.state.positions).length;
@@ -538,7 +602,7 @@ class TradingBot {
           break;
         }
         if (!bullEntrySet.has(candidate.symbol)) continue;
-        if (candidate.score < this.config.entryScoreThreshold || candidate.price <= 0) {
+        if (candidate.score < effectiveThreshold || candidate.price <= 0) {
           continue;
         }
         if (this.state.positions[candidate.symbol]) {
@@ -564,7 +628,7 @@ class TradingBot {
           this.addEvent('warning', `HTF check failed for ${candidate.symbol}: ${err.message} — entering anyway`);
         }
 
-        await this.executeEntry(candidate);
+        await this.executeEntry(candidate, { sizeFactor, tightStops, regimeLabel });
         openCount++;
       }
       }
@@ -602,9 +666,12 @@ class TradingBot {
 
   // ─── ENTRY ────────────────────────────────────────────────────
 
-  async executeEntry(signal) {
+  async executeEntry(signal, opts = {}) {
     const { symbol, price } = signal;
-    const targetNotional = this.state.portfolioValue * this.config.positionSize;
+    const sizeFactor = opts.sizeFactor || 1.0;
+    const stopLossPct = opts.tightStops ? Math.min(this.config.stopLoss, 0.03) : this.config.stopLoss;
+    const takeProfitPct = opts.takeProfitPct || this.config.takeProfit;
+    const targetNotional = this.state.portfolioValue * this.config.positionSize * sizeFactor;
     const notional = Math.min(targetNotional, this.state.cashBalance);
 
     if (notional < 1) {
@@ -648,12 +715,16 @@ class TradingBot {
         notional,
         entryCost,
         entryTime: new Date().toISOString(),
-        stopPrice: fillPrice * (1 - this.config.stopLoss),
-        targetPrice: fillPrice * (1 + this.config.takeProfit),
+        stopPrice: fillPrice * (1 - stopLossPct),
+        targetPrice: fillPrice * (1 + takeProfitPct),
+        ...(opts.bearRally && { bearRally: true, btcRallyHigh: opts.btcRallyHigh || this._lastBtcPrice || 0 }),
+        ...(opts.maxHoldHours && { maxHoldHours: opts.maxHoldHours }),
       };
 
+      const regimeTag = opts.regimeLabel ? ` [${opts.regimeLabel}]` : '';
+      const sizeLabel = sizeFactor < 1 ? `${(this.config.positionSize * sizeFactor * 100).toFixed(0)}%` : `${(this.config.positionSize * 100).toFixed(0)}%`;
       this.addEvent('success',
-        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} (${(this.config.positionSize*100).toFixed(0)}% of portfolio) | spread ~$${entryCost.toFixed(2)}`
+        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} (${sizeLabel} of portfolio)${regimeTag} | spread ~$${entryCost.toFixed(2)}`
       );
 
       this.recordTrade({
@@ -668,9 +739,10 @@ class TradingBot {
 
   // ─── BEAR ENTRY ─────────────────────────────────────────────
 
-  async executeBearEntry(bearSignal, signal) {
+  async executeBearEntry(bearSignal, signal, opts = {}) {
     const { symbol, price } = signal;
-    const targetNotional = this.state.portfolioValue * this.config.positionSize;
+    const sizeFactor = opts.sizeFactor || 1.0;
+    const targetNotional = this.state.portfolioValue * this.config.positionSize * sizeFactor;
     const notional = Math.min(targetNotional, this.state.cashBalance);
 
     if (notional < 1) {
@@ -731,8 +803,9 @@ class TradingBot {
         time: new Date().toISOString(),
       };
 
+      const sizeTag = sizeFactor < 1 ? ` [${(sizeFactor * 100).toFixed(0)}% size — ${this._currentDetailedRegime?.label || 'reduced'}]` : '';
       this.addEvent('success',
-        `[MAIN][BEAR] Range entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | TP $${bearSignal.takeProfitPrice.toFixed(2)} SL $${bearSignal.stopLossPrice.toFixed(2)}`
+        `[MAIN][BEAR] Range entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | TP $${bearSignal.takeProfitPrice.toFixed(2)} SL $${bearSignal.stopLossPrice.toFixed(2)}${sizeTag}`
       );
 
       this.recordTrade({
@@ -751,10 +824,24 @@ class TradingBot {
     const pos = this.state.positions[symbol];
     if (!pos) return;
 
-    // Time-based exit: close if held too long
+    // Bear rally: BTC hard stop — exit if BTC drops 3% from the rally high at entry
+    if (pos.bearRally && pos.btcRallyHigh > 0) {
+      const btcNow = this._lastBtcPrice || 0;
+      // Update BTC rally high water mark
+      if (btcNow > pos.btcRallyHigh) pos.btcRallyHigh = btcNow;
+      if (btcNow > 0 && btcNow <= pos.btcRallyHigh * 0.97) {
+        await this.executeExit(symbol, currentPrice,
+          `BEAR RALLY BTC STOP (BTC $${btcNow.toFixed(0)} dropped 3% from rally high $${pos.btcRallyHigh.toFixed(0)})`
+        );
+        return;
+      }
+    }
+
+    // Time-based exit: use per-position override (e.g. 24h for bear rally) or config default
     const holdMs = Date.now() - new Date(pos.entryTime).getTime();
     const holdHours = holdMs / (1000 * 60 * 60);
-    if (holdHours >= this.config.maxHoldHours) {
+    const maxHoldHours = pos.maxHoldHours || this.config.maxHoldHours;
+    if (holdHours >= maxHoldHours) {
       await this.executeExit(symbol, currentPrice, `TIME EXIT (${Math.round(holdHours)}h)`);
       return;
     }
