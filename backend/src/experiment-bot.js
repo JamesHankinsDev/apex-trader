@@ -34,15 +34,17 @@ function saveState(state) {
 
 // Poll Alpaca for actual fill price
 async function getFillPrice(apiKey, secretKey, mode, orderId, fallbackPrice) {
+  if (orderId === 'dry-run') return { price: fallbackPrice, status: 'dry-run' };
   for (let i = 0; i < 5; i++) {
     await new Promise(r => setTimeout(r, 1000));
     try {
       const order = await alpaca.getOrder(apiKey, secretKey, mode, orderId);
-      if (order.filled_avg_price) return parseFloat(order.filled_avg_price);
-      if (order.status === 'canceled' || order.status === 'expired') break;
+      if (order.filled_avg_price) return { price: parseFloat(order.filled_avg_price), status: 'filled' };
+      if (order.status === 'canceled') return { price: fallbackPrice, status: 'canceled' };
+      if (order.status === 'expired') return { price: fallbackPrice, status: 'expired' };
     } catch { break; }
   }
-  return fallbackPrice;
+  return { price: fallbackPrice, status: 'unknown' };
 }
 
 class ExperimentBot {
@@ -185,6 +187,13 @@ class ExperimentBot {
 
       for (const symbol of Object.keys(this.state.positions)) {
         if (!alpacaSymbols.has(symbol)) {
+          const pos = this.state.positions[symbol];
+          const heldFor = pos.entryTime
+            ? `held ${Math.round((Date.now() - new Date(pos.entryTime).getTime()) / 60000)}min`
+            : 'unknown hold time';
+          this.addEvent('warning',
+            `Position ${symbol} removed externally — entry $${pos.entryPrice?.toFixed(4) || '?'} | $${pos.notional?.toFixed(2) || '?'} | ${heldFor} | order ${pos.orderId || 'n/a'}`
+          );
           delete this.state.positions[symbol];
         }
       }
@@ -356,7 +365,10 @@ class ExperimentBot {
 
     // BTC macro gate: skip entries if BTC is below 50-day SMA (reuse pre-fetched gate)
     if (!gate.open) {
-      this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50}`);
+      if (this._lastGateOpen !== false) {
+        this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50} — switching to BEAR mode`);
+        this._lastGateOpen = false;
+      }
 
       // Bear mode: try dead cat bounce entries (only on bear watchlist coins)
       const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
@@ -376,6 +388,10 @@ class ExperimentBot {
         }
       }
     } else {
+      if (this._lastGateOpen !== true) {
+        this.addEvent('success', `[BTC GATE] Open — BTC $${gate.btcPrice} above 50-SMA $${gate.sma50} — switching to BULL mode`);
+        this._lastGateOpen = true;
+      }
       // Bull mode — buy dips (only on bull watchlist coins)
       const entrySet = new Set(entryWatchlist);
       let openCount = Object.keys(this.state.positions).length;
@@ -422,9 +438,23 @@ class ExperimentBot {
         { symbol, side: 'buy', notional }
       );
 
-      const fillPrice = await getFillPrice(
+      const fill = await getFillPrice(
         this.config.apiKey, this.config.secretKey, this.config.mode, order.id, price
       );
+
+      if (fill.status === 'canceled' || fill.status === 'expired' || fill.status === 'dry-run') {
+        this.addEvent('warning',
+          `Order ${fill.status} for ${symbol} | attempted $${notional.toFixed(2)} @ ~$${price.toFixed(4)} — no position opened`
+        );
+        return;
+      }
+      if (fill.status === 'unknown') {
+        this.addEvent('warning',
+          `Order status unknown for ${symbol} (${order.id}) | attempted $${notional.toFixed(2)} — position may not have filled`
+        );
+      }
+
+      const fillPrice = fill.price;
       const entryCost = notional * SPREAD_COST_PCT;
       const qty = (notional - entryCost) / fillPrice;
 
@@ -458,9 +488,23 @@ class ExperimentBot {
         { symbol, side: 'buy', notional }
       );
 
-      const fillPrice = await getFillPrice(
+      const fill = await getFillPrice(
         this.config.apiKey, this.config.secretKey, this.config.mode, order.id, price
       );
+
+      if (fill.status === 'canceled' || fill.status === 'expired' || fill.status === 'dry-run') {
+        this.addEvent('warning',
+          `[BEAR] Order ${fill.status} for ${symbol} | attempted $${notional.toFixed(2)} @ ~$${price.toFixed(4)} — no position opened`
+        );
+        return;
+      }
+      if (fill.status === 'unknown') {
+        this.addEvent('warning',
+          `[BEAR] Order status unknown for ${symbol} (${order.id}) | attempted $${notional.toFixed(2)} — position may not have filled`
+        );
+      }
+
+      const fillPrice = fill.price;
       const entryCost = notional * SPREAD_COST_PCT;
       const qty = (notional - entryCost) / fillPrice;
 
@@ -504,9 +548,15 @@ class ExperimentBot {
 
     try {
       const closeOrder = await alpaca.closePosition(this.config.apiKey, this.config.secretKey, this.config.mode, symbol);
-      const exitPrice = closeOrder?.id
+      const exitFill = closeOrder?.id
         ? await getFillPrice(this.config.apiKey, this.config.secretKey, this.config.mode, closeOrder.id, price)
-        : price;
+        : { price, status: 'direct' };
+      const exitPrice = exitFill.price;
+
+      if (exitFill.status === 'canceled' || exitFill.status === 'expired') {
+        this.addEvent('danger', `Exit order ${exitFill.status} for ${symbol} — position may still be open`);
+        return;
+      }
 
       const exitCost = pos.notional * SPREAD_COST_PCT;
       const totalCost = (pos.entryCost || 0) + exitCost;
