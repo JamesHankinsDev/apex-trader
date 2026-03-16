@@ -1,4 +1,6 @@
-// src/benchmark.js - Benchmark tracking: equal-weight & market-cap weighted
+// src/benchmark.js - Benchmark tracking: BTC hold, equal-weight & market-cap weighted
+// Uses 50-day lookback for base prices (aligns with 50-day SMA gate check).
+// Each bot creates its own instance via `new BenchmarkTracker()`.
 const axios = require('axios');
 
 // CoinGecko symbol mapping (watchlist symbol → CoinGecko ID)
@@ -24,6 +26,9 @@ const COINGECKO_IDS = {
   'BCH/USD': 'bitcoin-cash',
   'AAVE/USD': 'aave',
 };
+
+const HISTORY_CAP = 2000;      // ~33 hours at 60s intervals, ~16h at 30s
+const LOOKBACK_DAYS = 50;
 
 /**
  * Fetch market caps from CoinGecko (free, no auth, rate-limited to ~10-30 req/min)
@@ -64,72 +69,123 @@ class BenchmarkTracker {
   constructor() {
     this.initialized = false;
     this.startValue = 0;          // Same as portfolio startValue
-    this.basePrices = {};         // Prices when benchmarks started { 'BTC/USD': 50000, ... }
+    this.basePrices = {};         // Prices from 50 days ago { 'BTC/USD': 50000, ... }
     this.marketCaps = {};         // Market caps at start { 'BTC/USD': 1e12, ... }
     this.equalWeights = {};       // Equal-weight allocations { 'BTC/USD': 0.2, ... }
     this.mcapWeights = {};        // Market-cap weighted allocations
-    this.equalHistory = [];       // [{ t, v }] — equal-weight benchmark equity curve
-    this.mcapHistory = [];        // [{ t, v }] — market-cap weighted benchmark equity curve
-    this.btcHistory = [];         // [{ t, v }] — BTC-only benchmark equity curve
+    this.equalHistory = [];       // [{ t, v }] — real-time equal-weight benchmark
+    this.mcapHistory = [];        // [{ t, v }] — real-time market-cap weighted benchmark
+    this.btcHistory = [];         // [{ t, v }] — real-time BTC-only benchmark
+    this.dailyEqualHistory = [];  // [{ t, v }] — daily equal-weight (computed from bars)
+    this.dailyMcapHistory = [];   // [{ t, v }] — daily market-cap weighted
+    this.dailyBtcHistory = [];    // [{ t, v }] — daily BTC-only
     this.lastEqualValue = 0;
     this.lastMcapValue = 0;
     this.lastBtcValue = 0;
   }
 
   /**
-   * Initialize benchmarks when bot starts.
+   * Initialize benchmarks with 50-day lookback base prices.
    * @param {number} startValue - Portfolio starting value (benchmarks invest the same amount)
    * @param {string[]} watchlist - Array of symbols like ['BTC/USD', 'ETH/USD', ...]
-   * @param {Function} getPriceFn - async (symbol) => price
+   * @param {Function} getBarsFn - async (symbol, timeframe, limit, lookbackMs) => bars[]
    */
-  async initialize(startValue, watchlist, getPriceFn) {
+  async initialize(startValue, watchlist, getBarsFn) {
     this.startValue = startValue;
     this.basePrices = {};
     this.equalHistory = [];
     this.mcapHistory = [];
     this.btcHistory = [];
+    this.dailyEqualHistory = [];
+    this.dailyMcapHistory = [];
+    this.dailyBtcHistory = [];
 
-    // Fetch current prices for all watchlist assets
+    // Fetch daily bars for 50-day lookback to get base prices
+    const lookbackMs = (LOOKBACK_DAYS + 5) * 24 * 60 * 60 * 1000; // extra padding
     const validSymbols = [];
-    for (const sym of watchlist) {
+    const allBars = {}; // symbol -> bars[]
+
+    // Always include BTC for the BTC Hold benchmark, even if not in this bot's watchlist
+    const symbolsToFetch = new Set(watchlist);
+    symbolsToFetch.add('BTC/USD');
+
+    for (const sym of symbolsToFetch) {
       try {
-        const price = await getPriceFn(sym);
-        if (price && price > 0) {
-          this.basePrices[sym] = price;
+        const bars = await getBarsFn(sym, '1Day', LOOKBACK_DAYS + 5, lookbackMs);
+        if (bars && bars.length > 0 && bars[0].c > 0) {
+          // Use the oldest bar's close as the 50-day-ago base price
+          // Bars use { t, o, h, l, c, v } format (Alpaca shorthand)
+          this.basePrices[sym] = bars[0].c;
           validSymbols.push(sym);
+          allBars[sym] = bars;
         }
       } catch (err) {
-        console.error(`Benchmark: failed to get price for ${sym}:`, err.message);
+        console.error(`Benchmark: failed to get 50-day bars for ${sym}:`, err.message);
       }
     }
 
     if (validSymbols.length === 0) {
-      console.error('Benchmark: no valid prices — benchmarks disabled');
+      console.error('Benchmark: no valid 50-day prices — benchmarks disabled');
       return;
     }
 
-    // Equal weights
-    const equalWeight = 1 / validSymbols.length;
+    // Equal and MCAP weights use only the bot's watchlist symbols (not the extra BTC)
+    const watchlistSymbols = validSymbols.filter(s => watchlist.includes(s));
+    const equalWeight = watchlistSymbols.length > 0 ? 1 / watchlistSymbols.length : 0;
     this.equalWeights = {};
-    for (const sym of validSymbols) {
+    for (const sym of watchlistSymbols) {
       this.equalWeights[sym] = equalWeight;
     }
 
     // Fetch market caps for market-cap weighting
-    this.marketCaps = await fetchMarketCaps(validSymbols);
+    this.marketCaps = await fetchMarketCaps(watchlistSymbols);
     const totalMcap = Object.values(this.marketCaps).reduce((sum, v) => sum + v, 0);
 
     this.mcapWeights = {};
     if (totalMcap > 0) {
-      for (const sym of validSymbols) {
+      for (const sym of watchlistSymbols) {
         this.mcapWeights[sym] = (this.marketCaps[sym] || 0) / totalMcap;
       }
     } else {
       // Fallback to equal weight if market caps unavailable
-      for (const sym of validSymbols) {
+      for (const sym of watchlistSymbols) {
         this.mcapWeights[sym] = equalWeight;
       }
       console.warn('Benchmark: market cap data unavailable — mcap benchmark falls back to equal weight');
+    }
+
+    // ── Compute daily benchmark curves from historical bars ──
+    // Find the bar count we can align across (use the shortest series)
+    const btcBars = allBars['BTC/USD'] || [];
+    const barCounts = watchlistSymbols.map(s => (allBars[s] || []).length).filter(n => n > 0);
+    const alignedLen = barCounts.length > 0 ? Math.min(...barCounts, btcBars.length || Infinity) : 0;
+
+    for (let i = 0; i < alignedLen; i++) {
+      // Timestamp from BTC bars (or first available watchlist symbol)
+      const refBars = btcBars.length >= alignedLen ? btcBars : allBars[watchlistSymbols[0]];
+      const t = new Date(refBars[i].t).getTime();
+
+      // Equal-weight & MCAP-weight benchmark values at day i
+      let eqVal = 0, mcVal = 0;
+      for (const sym of watchlistSymbols) {
+        const bars = allBars[sym];
+        if (!bars || !bars[i]) continue;
+        const basePrice = this.basePrices[sym];
+        const dayPrice = bars[i].c;
+        const ret = (dayPrice - basePrice) / basePrice;
+        eqVal += startValue * (this.equalWeights[sym] || 0) * (1 + ret);
+        mcVal += startValue * (this.mcapWeights[sym] || 0) * (1 + ret);
+      }
+      if (eqVal > 0) this.dailyEqualHistory.push({ t, v: eqVal });
+      if (mcVal > 0) this.dailyMcapHistory.push({ t, v: mcVal });
+
+      // BTC-only benchmark at day i
+      if (btcBars[i]) {
+        const btcBase = this.basePrices['BTC/USD'];
+        const btcDay = btcBars[i].c;
+        const btcRet = (btcDay - btcBase) / btcBase;
+        this.dailyBtcHistory.push({ t, v: startValue * (1 + btcRet) });
+      }
     }
 
     this.lastEqualValue = startValue;
@@ -143,9 +199,11 @@ class BenchmarkTracker {
 
     this.initialized = true;
 
-    console.log('Benchmark initialized:');
+    console.log(`Benchmark initialized (${LOOKBACK_DAYS}-day lookback):`);
+    console.log('  Base prices:', Object.entries(this.basePrices).map(([s, p]) => `${s}: $${p.toFixed(2)}`).join(', '));
     console.log('  Equal weights:', Object.entries(this.equalWeights).map(([s, w]) => `${s}: ${(w * 100).toFixed(1)}%`).join(', '));
     console.log('  Mcap weights:', Object.entries(this.mcapWeights).map(([s, w]) => `${s}: ${(w * 100).toFixed(1)}%`).join(', '));
+    console.log(`  Daily history: ${this.dailyBtcHistory.length} days`);
   }
 
   /**
@@ -192,21 +250,23 @@ class BenchmarkTracker {
     if (this.lastBtcValue > 0) this.btcHistory.push({ t: now, v: this.lastBtcValue });
 
     // Cap history length
-    if (this.equalHistory.length > 500) this.equalHistory.shift();
-    if (this.mcapHistory.length > 500) this.mcapHistory.shift();
-    if (this.btcHistory.length > 500) this.btcHistory.shift();
+    if (this.equalHistory.length > HISTORY_CAP) this.equalHistory.shift();
+    if (this.mcapHistory.length > HISTORY_CAP) this.mcapHistory.shift();
+    if (this.btcHistory.length > HISTORY_CAP) this.btcHistory.shift();
   }
 
   /**
    * Get benchmark data for the status endpoint.
+   * Includes both real-time history and daily history for multi-period views.
    */
   getStatus() {
     if (!this.initialized) {
       return {
         initialized: false,
-        equalWeight: { value: 0, pnl: 0, pctReturn: 0, history: [] },
-        mcapWeight: { value: 0, pnl: 0, pctReturn: 0, history: [] },
-        btcOnly: { value: 0, pnl: 0, pctReturn: 0, history: [] },
+        lookbackDays: LOOKBACK_DAYS,
+        equalWeight: { value: 0, pnl: 0, pctReturn: 0, history: [], dailyHistory: [] },
+        mcapWeight: { value: 0, pnl: 0, pctReturn: 0, history: [], dailyHistory: [] },
+        btcOnly: { value: 0, pnl: 0, pctReturn: 0, history: [], dailyHistory: [] },
         weights: { equal: {}, mcap: {} },
       };
     }
@@ -220,23 +280,27 @@ class BenchmarkTracker {
 
     return {
       initialized: true,
+      lookbackDays: LOOKBACK_DAYS,
       equalWeight: {
         value: this.lastEqualValue,
         pnl: equalPnl,
         pctReturn: equalPct,
-        history: this.equalHistory.slice(-200),
+        history: this.equalHistory,
+        dailyHistory: this.dailyEqualHistory,
       },
       mcapWeight: {
         value: this.lastMcapValue,
         pnl: mcapPnl,
         pctReturn: mcapPct,
-        history: this.mcapHistory.slice(-200),
+        history: this.mcapHistory,
+        dailyHistory: this.dailyMcapHistory,
       },
       btcOnly: {
         value: this.lastBtcValue,
         pnl: btcPnl,
         pctReturn: btcPct,
-        history: this.btcHistory.slice(-200),
+        history: this.btcHistory,
+        dailyHistory: this.dailyBtcHistory,
       },
       weights: {
         equal: this.equalWeights,
@@ -246,4 +310,4 @@ class BenchmarkTracker {
   }
 }
 
-module.exports = new BenchmarkTracker();
+module.exports = BenchmarkTracker;

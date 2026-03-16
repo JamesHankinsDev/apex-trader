@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
-const benchmark = require('./benchmark');
+const BenchmarkTracker = require('./benchmark');
+const benchmark = new BenchmarkTracker();
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
 const { evaluateBearEntry, setBearCooldown } = require('./bearStrategy');
@@ -177,14 +178,13 @@ class TradingBot {
 
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
 
-      // Initialize benchmarks (equal-weight & market-cap weighted)
+      // Initialize benchmarks with 50-day lookback (aligns with 50-SMA gate)
       try {
         const apiKey = this.config.apiKey, secretKey = this.config.secretKey;
-        const sh = this.streamHandle;
         await benchmark.initialize(
           this.state.startValue,
           this.config.watchlist,
-          (sym) => alpaca.getLatestCryptoPrice(apiKey, secretKey, sym, sh)
+          (sym, tf, limit, lookbackMs) => alpaca.getCryptoBars(apiKey, secretKey, sym, tf, limit, lookbackMs)
         );
       } catch (err) {
         console.error('Benchmark initialization failed:', err.message);
@@ -576,7 +576,7 @@ class TradingBot {
         this.addEvent('info', `New day — today P&L reset at $${this.state.portfolioValue.toFixed(2)}`);
       }
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
-      if (this.state.equityHistory.length > 500) this.state.equityHistory.shift();
+      if (this.state.equityHistory.length > 2000) this.state.equityHistory.shift();
 
       // Update benchmarks with live prices from signals (already overridden with live prices)
       const currentPrices = {};
@@ -985,7 +985,7 @@ class TradingBot {
       ),
       signals: this.state.signals,
       trades: this.state.trades.slice(0, 50),
-      equityHistory: this.state.equityHistory.slice(-200),
+      equityHistory: this.state.equityHistory,
       wins: this.state.wins,
       losses: this.state.losses,
       winRate: total > 0 ? Math.round((this.state.wins / total) * 100) : null,

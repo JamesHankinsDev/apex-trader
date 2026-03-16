@@ -9,6 +9,8 @@ const { isBtcGateOpen, getMarketRegime } = require('./btcGate');
 const { evaluateBearEntry1 } = require('./bearStrategy1');
 const { setBearCooldown } = require('./bearStrategy');
 const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
+const BenchmarkTracker = require('./benchmark');
+const benchmark = new BenchmarkTracker();
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment-state.json');
 const SPREAD_COST_PCT = 0.0015;
@@ -129,6 +131,18 @@ class ExperimentBot {
       saveState(this.state);
       this.state.startedAt = new Date().toISOString();
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
+
+      // Initialize benchmarks with 50-day lookback (aligns with 50-SMA gate)
+      try {
+        const apiKey = this.config.apiKey, secretKey = this.config.secretKey;
+        await benchmark.initialize(
+          this.state.startValue,
+          this.config.watchlist,
+          (sym, tf, limit, lookbackMs) => alpaca.getCryptoBars(apiKey, secretKey, sym, tf, limit, lookbackMs)
+        );
+      } catch (err) {
+        console.error('Exp1 benchmark initialization failed:', err.message);
+      }
 
       // Connect WebSocket stream for real-time prices
       this.streamHandle = cryptoStream.connect(
@@ -419,7 +433,14 @@ class ExperimentBot {
         this.state.todayDate = currentDate;
       }
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
-      if (this.state.equityHistory.length > 500) this.state.equityHistory.shift();
+      if (this.state.equityHistory.length > 2000) this.state.equityHistory.shift();
+
+      // Update benchmarks with live prices from signals
+      const currentPrices = {};
+      for (const sig of this.state.signals) {
+        if (sig.price > 0) currentPrices[sig.symbol] = sig.price;
+      }
+      benchmark.update(currentPrices);
       updateBalance('exp1', this.state.portfolioValue);
     } catch {}
   }
@@ -638,7 +659,7 @@ class ExperimentBot {
       positions: this.state.positions,
       signals: this.state.signals,
       trades: this.state.trades.slice(0, 50),
-      equityHistory: this.state.equityHistory.slice(-200),
+      equityHistory: this.state.equityHistory,
       wins: this.state.wins,
       losses: this.state.losses,
       winRate: total > 0 ? Math.round((this.state.wins / total) * 100) : null,
@@ -647,6 +668,7 @@ class ExperimentBot {
       startedAt: this.state.startedAt,
       lastBearSignal: this.state.lastBearSignal,
       events: this.state.events,
+      benchmarks: benchmark.getStatus(),
     };
   }
 }

@@ -16,9 +16,33 @@ const fmtPct = (v) => {
 const fmtTime = (iso) =>
   iso ? new Date(iso).toLocaleTimeString("en-US", { hour12: false }) : "—";
 
+// ─── Time period constants ────────────────────────────────────
+const PERIODS = {
+  "1D":  { ms: 24 * 60 * 60 * 1000, label: "1D", useDaily: false },
+  "1W":  { ms: 7 * 24 * 60 * 60 * 1000, label: "1W", useDaily: true },
+  "1M":  { ms: 30 * 24 * 60 * 60 * 1000, label: "1M", useDaily: true },
+  "50D": { ms: 50 * 24 * 60 * 60 * 1000, label: "50D", useDaily: true },
+};
+
+function filterByPeriod(arr, periodMs) {
+  if (!arr || arr.length === 0) return [];
+  const cutoff = Date.now() - periodMs;
+  return arr.filter(d => d.t >= cutoff);
+}
+
+// Format date label based on period
+function fmtDateLabel(ts, useDaily) {
+  const d = new Date(ts);
+  if (useDaily) {
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 // ─── EQUITY CHART ─────────────────────────────────────────────
-function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }) {
+function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory, period }) {
   const canvasRef = useRef(null);
+  const periodCfg = PERIODS[period] || PERIODS["1D"];
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -31,6 +55,9 @@ function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, W, H);
 
+    const BOTTOM_PAD = 18; // space for X-axis labels
+    const chartH = H - BOTTOM_PAD;
+
     // Combine all values to compute shared Y-axis range
     const vals = data.map((d) => d.v);
     const eqVals = equalHistory?.map((d) => d.v) || [];
@@ -40,7 +67,7 @@ function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }
     const minV = Math.min(...allVals) * 0.998;
     const maxV = Math.max(...allVals) * 1.002;
     const range = maxV - minV || 1;
-    const toY = (v) => H - ((v - minV) / range) * H;
+    const toY = (v) => chartH - ((v - minV) / range) * chartH;
 
     // Helper to draw a line from a data array
     const drawLine = (arr, maxPts, color, lineWidth, dashed) => {
@@ -66,7 +93,7 @@ function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }
     ctx.strokeStyle = "rgba(26,26,46,0.8)";
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
-      const y = (i / 4) * H;
+      const y = (i / 4) * chartH;
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(W, y);
@@ -98,13 +125,13 @@ function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }
     const color = isUp ? "#00ff88" : "#ff3355";
 
     // Fill
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    const grad = ctx.createLinearGradient(0, 0, 0, chartH);
     grad.addColorStop(0, isUp ? "rgba(0,255,136,0.2)" : "rgba(255,51,85,0.2)");
     grad.addColorStop(1, "rgba(0,0,0,0)");
     ctx.beginPath();
-    ctx.moveTo(toX(0), H);
+    ctx.moveTo(toX(0), chartH);
     data.forEach((d, i) => ctx.lineTo(toX(i), toY(d.v)));
-    ctx.lineTo(toX(data.length - 1), H);
+    ctx.lineTo(toX(data.length - 1), chartH);
     ctx.closePath();
     ctx.fillStyle = grad;
     ctx.fill();
@@ -131,6 +158,21 @@ function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }
     ctx.lineWidth = 1;
     ctx.stroke();
 
+    // X-axis date/time labels
+    const labelCount = Math.min(5, data.length);
+    if (labelCount >= 2) {
+      ctx.fillStyle = "#555577";
+      ctx.font = "9px Share Tech Mono, monospace";
+      ctx.textAlign = "center";
+      for (let i = 0; i < labelCount; i++) {
+        const idx = Math.round((i / (labelCount - 1)) * (data.length - 1));
+        const x = toX(idx);
+        const label = fmtDateLabel(data[idx].t, periodCfg.useDaily);
+        ctx.fillText(label, x, H - 3);
+      }
+      ctx.textAlign = "start";
+    }
+
     // Legend
     const legendY = 14;
     const legendItems = [
@@ -155,7 +197,7 @@ function EquityChart({ data, startValue, equalHistory, mcapHistory, btcHistory }
       ctx.fillText(item.label, legendX + 22, legendY + 4);
       legendX += 85;
     }
-  }, [data, startValue, equalHistory, mcapHistory, btcHistory]);
+  }, [data, startValue, equalHistory, mcapHistory, btcHistory, period, periodCfg]);
 
   return <canvas ref={canvasRef} style={{ display: "block", width: "100%" }} />;
 }
@@ -261,6 +303,9 @@ export default function Dashboard() {
   const [exp2Status, setExp2Status] = useState(null);
   const [exp2Connecting, setExp2Connecting] = useState(false);
   const [leaderboard, setLeaderboard] = useState(null);
+  const [chartPeriod, setChartPeriod] = useState("1D");
+  const [expChartPeriod, setExpChartPeriod] = useState("1D");
+  const [exp2ChartPeriod, setExp2ChartPeriod] = useState("1D");
 
   // Clock
   useEffect(() => {
@@ -949,14 +994,40 @@ export default function Dashboard() {
         {/* CENTER */}
         <div className={styles.center}>
           <div className={styles.chartArea}>
-            <div className={styles.chartLabel}>PORTFOLIO EQUITY CURVE</div>
-            <EquityChart
-              data={status?.equityHistory || [{ t: Date.now(), v: 100 }]}
-              startValue={sv}
-              equalHistory={status?.benchmarks?.equalWeight?.history}
-              mcapHistory={status?.benchmarks?.mcapWeight?.history}
-              btcHistory={status?.benchmarks?.btcOnly?.history}
-            />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div className={styles.chartLabel} style={{ marginBottom: 0 }}>PORTFOLIO EQUITY · BENCHMARKS (50-day return)</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                {Object.keys(PERIODS).map(p => (
+                  <button key={p} onClick={() => setChartPeriod(p)} style={{
+                    padding: "2px 8px", fontSize: 9, fontFamily: "var(--font-mono)",
+                    letterSpacing: 1, border: "1px solid var(--border)", borderRadius: 3, cursor: "pointer",
+                    background: chartPeriod === p ? "rgba(68,136,255,0.25)" : "transparent",
+                    color: chartPeriod === p ? "#4488ff" : "var(--dim)",
+                  }}>{p}</button>
+                ))}
+              </div>
+            </div>
+            {(() => {
+              const pCfg = PERIODS[chartPeriod] || PERIODS["1D"];
+              const bm = status?.benchmarks;
+              const eqH = pCfg.useDaily ? bm?.equalWeight?.dailyHistory : filterByPeriod(bm?.equalWeight?.history, pCfg.ms);
+              const mcH = pCfg.useDaily ? bm?.mcapWeight?.dailyHistory : filterByPeriod(bm?.mcapWeight?.history, pCfg.ms);
+              const btH = pCfg.useDaily ? bm?.btcOnly?.dailyHistory : filterByPeriod(bm?.btcOnly?.history, pCfg.ms);
+              const eqData = pCfg.useDaily ? eqH : eqH;
+              const filteredEquity = pCfg.useDaily
+                ? (status?.equityHistory || []).filter(d => d.t >= Date.now() - pCfg.ms)
+                : filterByPeriod(status?.equityHistory, pCfg.ms);
+              return (
+                <EquityChart
+                  data={filteredEquity.length > 0 ? filteredEquity : [{ t: Date.now(), v: sv || 100 }]}
+                  startValue={sv}
+                  equalHistory={eqData}
+                  mcapHistory={mcH}
+                  btcHistory={btH}
+                  period={chartPeriod}
+                />
+              );
+            })()}
           </div>
 
           {/* BENCHMARK COMPARISON */}
@@ -1525,9 +1596,69 @@ export default function Dashboard() {
             {/* CENTER: Chart + Trade log */}
             <div className={styles.center}>
               <div className={styles.chartArea}>
-                <div className={styles.chartLabel}>EXPERIMENT EQUITY CURVE</div>
-                <EquityChart data={es?.equityHistory || [{ t: Date.now(), v: 100 }]} startValue={esv} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div className={styles.chartLabel} style={{ marginBottom: 0 }}>EXP 1 EQUITY · BENCHMARKS (50-day return)</div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {Object.keys(PERIODS).map(p => (
+                      <button key={p} onClick={() => setExpChartPeriod(p)} style={{
+                        padding: "2px 8px", fontSize: 9, fontFamily: "var(--font-mono)",
+                        letterSpacing: 1, border: "1px solid var(--border)", borderRadius: 3, cursor: "pointer",
+                        background: expChartPeriod === p ? "rgba(68,136,255,0.25)" : "transparent",
+                        color: expChartPeriod === p ? "#4488ff" : "var(--dim)",
+                      }}>{p}</button>
+                    ))}
+                  </div>
+                </div>
+                {(() => {
+                  const pCfg = PERIODS[expChartPeriod] || PERIODS["1D"];
+                  const bm = es?.benchmarks;
+                  const eqH = pCfg.useDaily ? bm?.equalWeight?.dailyHistory : filterByPeriod(bm?.equalWeight?.history, pCfg.ms);
+                  const mcH = pCfg.useDaily ? bm?.mcapWeight?.dailyHistory : filterByPeriod(bm?.mcapWeight?.history, pCfg.ms);
+                  const btH = pCfg.useDaily ? bm?.btcOnly?.dailyHistory : filterByPeriod(bm?.btcOnly?.history, pCfg.ms);
+                  const filteredEquity = (es?.equityHistory || []).filter(d => d.t >= Date.now() - pCfg.ms);
+                  return (
+                    <EquityChart
+                      data={filteredEquity.length > 0 ? filteredEquity : [{ t: Date.now(), v: esv || 100 }]}
+                      startValue={esv}
+                      equalHistory={eqH}
+                      mcapHistory={mcH}
+                      btcHistory={btH}
+                      period={expChartPeriod}
+                    />
+                  );
+                })()}
               </div>
+
+              {/* BENCHMARK COMPARISON */}
+              {es?.benchmarks?.initialized && (() => {
+                const bm = es.benchmarks;
+                const portfolioPct = esv > 0 ? ((epv - esv) / esv) * 100 : 0;
+                const btcPct = bm.btcOnly.pctReturn;
+                const eqPct = bm.equalWeight.pctReturn;
+                const mcPct = bm.mcapWeight.pctReturn;
+                const vsBtc = portfolioPct - btcPct;
+                const vsEqual = portfolioPct - eqPct;
+                const vsMcap = portfolioPct - mcPct;
+                return (
+                  <div className={styles.benchmarkBar}>
+                    {[
+                      { label: "PORTFOLIO", val: fmtPct(portfolioPct), sub: fmt$(epv), color: portfolioPct >= 0 ? "var(--green)" : "var(--red)" },
+                      { label: "BTC HOLD", val: fmtPct(btcPct), sub: fmt$(bm.btcOnly.value), color: btcPct >= 0 ? "#ff9900" : "var(--red)" },
+                      { label: "EQUAL WT", val: fmtPct(eqPct), sub: fmt$(bm.equalWeight.value), color: eqPct >= 0 ? "var(--yellow)" : "var(--red)" },
+                      { label: "MCAP WT", val: fmtPct(mcPct), sub: fmt$(bm.mcapWeight.value), color: mcPct >= 0 ? "rgb(168,85,247)" : "var(--red)" },
+                      { label: "VS BTC", val: `${vsBtc >= 0 ? "+" : ""}${vsBtc.toFixed(2)}%`, sub: vsBtc >= 0 ? "outperforming" : "underperforming", color: vsBtc >= 0 ? "var(--green)" : "var(--red)" },
+                      { label: "VS EQUAL", val: `${vsEqual >= 0 ? "+" : ""}${vsEqual.toFixed(2)}%`, sub: vsEqual >= 0 ? "outperforming" : "underperforming", color: vsEqual >= 0 ? "var(--green)" : "var(--red)" },
+                      { label: "VS MCAP", val: `${vsMcap >= 0 ? "+" : ""}${vsMcap.toFixed(2)}%`, sub: vsMcap >= 0 ? "outperforming" : "underperforming", color: vsMcap >= 0 ? "var(--green)" : "var(--red)" },
+                    ].map((s) => (
+                      <div className={styles.benchmarkBlock} key={s.label}>
+                        <div className={styles.benchmarkLabel}>{s.label}</div>
+                        <div className={styles.benchmarkVal} style={{ color: s.color }}>{s.val}</div>
+                        <div className={styles.benchmarkSub}>{s.sub}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
 
               <div className={styles.tradeLog}>
                 <div className={`${styles.logRow} ${styles.logHeader}`}>
@@ -1858,9 +1989,69 @@ export default function Dashboard() {
             {/* CENTER: Chart + Trade log */}
             <div className={styles.center}>
               <div className={styles.chartArea}>
-                <div className={styles.chartLabel}>EXPERIMENT 2 EQUITY CURVE</div>
-                <EquityChart data={e2?.equityHistory || [{ t: Date.now(), v: 100 }]} startValue={e2sv} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div className={styles.chartLabel} style={{ marginBottom: 0 }}>EXP 2 EQUITY · BENCHMARKS (50-day return)</div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {Object.keys(PERIODS).map(p => (
+                      <button key={p} onClick={() => setExp2ChartPeriod(p)} style={{
+                        padding: "2px 8px", fontSize: 9, fontFamily: "var(--font-mono)",
+                        letterSpacing: 1, border: "1px solid var(--border)", borderRadius: 3, cursor: "pointer",
+                        background: exp2ChartPeriod === p ? "rgba(68,136,255,0.25)" : "transparent",
+                        color: exp2ChartPeriod === p ? "#4488ff" : "var(--dim)",
+                      }}>{p}</button>
+                    ))}
+                  </div>
+                </div>
+                {(() => {
+                  const pCfg = PERIODS[exp2ChartPeriod] || PERIODS["1D"];
+                  const bm = e2?.benchmarks;
+                  const eqH = pCfg.useDaily ? bm?.equalWeight?.dailyHistory : filterByPeriod(bm?.equalWeight?.history, pCfg.ms);
+                  const mcH = pCfg.useDaily ? bm?.mcapWeight?.dailyHistory : filterByPeriod(bm?.mcapWeight?.history, pCfg.ms);
+                  const btH = pCfg.useDaily ? bm?.btcOnly?.dailyHistory : filterByPeriod(bm?.btcOnly?.history, pCfg.ms);
+                  const filteredEquity = (e2?.equityHistory || []).filter(d => d.t >= Date.now() - pCfg.ms);
+                  return (
+                    <EquityChart
+                      data={filteredEquity.length > 0 ? filteredEquity : [{ t: Date.now(), v: e2sv || 100 }]}
+                      startValue={e2sv}
+                      equalHistory={eqH}
+                      mcapHistory={mcH}
+                      btcHistory={btH}
+                      period={exp2ChartPeriod}
+                    />
+                  );
+                })()}
               </div>
+
+              {/* BENCHMARK COMPARISON */}
+              {e2?.benchmarks?.initialized && (() => {
+                const bm = e2.benchmarks;
+                const portfolioPct = e2sv > 0 ? ((e2pv - e2sv) / e2sv) * 100 : 0;
+                const btcPct = bm.btcOnly.pctReturn;
+                const eqPct = bm.equalWeight.pctReturn;
+                const mcPct = bm.mcapWeight.pctReturn;
+                const vsBtc = portfolioPct - btcPct;
+                const vsEqual = portfolioPct - eqPct;
+                const vsMcap = portfolioPct - mcPct;
+                return (
+                  <div className={styles.benchmarkBar}>
+                    {[
+                      { label: "PORTFOLIO", val: fmtPct(portfolioPct), sub: fmt$(e2pv), color: portfolioPct >= 0 ? "var(--green)" : "var(--red)" },
+                      { label: "BTC HOLD", val: fmtPct(btcPct), sub: fmt$(bm.btcOnly.value), color: btcPct >= 0 ? "#ff9900" : "var(--red)" },
+                      { label: "EQUAL WT", val: fmtPct(eqPct), sub: fmt$(bm.equalWeight.value), color: eqPct >= 0 ? "var(--yellow)" : "var(--red)" },
+                      { label: "MCAP WT", val: fmtPct(mcPct), sub: fmt$(bm.mcapWeight.value), color: mcPct >= 0 ? "rgb(168,85,247)" : "var(--red)" },
+                      { label: "VS BTC", val: `${vsBtc >= 0 ? "+" : ""}${vsBtc.toFixed(2)}%`, sub: vsBtc >= 0 ? "outperforming" : "underperforming", color: vsBtc >= 0 ? "var(--green)" : "var(--red)" },
+                      { label: "VS EQUAL", val: `${vsEqual >= 0 ? "+" : ""}${vsEqual.toFixed(2)}%`, sub: vsEqual >= 0 ? "outperforming" : "underperforming", color: vsEqual >= 0 ? "var(--green)" : "var(--red)" },
+                      { label: "VS MCAP", val: `${vsMcap >= 0 ? "+" : ""}${vsMcap.toFixed(2)}%`, sub: vsMcap >= 0 ? "outperforming" : "underperforming", color: vsMcap >= 0 ? "var(--green)" : "var(--red)" },
+                    ].map((s) => (
+                      <div className={styles.benchmarkBlock} key={s.label}>
+                        <div className={styles.benchmarkLabel}>{s.label}</div>
+                        <div className={styles.benchmarkVal} style={{ color: s.color }}>{s.val}</div>
+                        <div className={styles.benchmarkSub}>{s.sub}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
 
               <div className={styles.tradeLog}>
                 <div className={`${styles.logRow} ${styles.logHeader}`}>
