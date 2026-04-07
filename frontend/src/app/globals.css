@@ -22,24 +22,26 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
   overflow-x: hidden;
 }
 
-/* Scanlines */
+/* Scanlines — subtle */
 body::before {
   content: '';
   position: fixed; inset: 0;
-  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,136,0.01) 2px, rgba(0,255,136,0.01) 4px);
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,136,0.008) 2px, rgba(0,255,136,0.008) 4px);
   pointer-events: none; z-index: 9999;
 }
 
-/* Grid bg */
+/* Grid bg — subtle */
 body::after {
   content: '';
   position: fixed; inset: 0;
   background-image:
-    linear-gradient(rgba(68,136,255,0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(68,136,255,0.035) 1px, transparent 1px);
+    linear-gradient(rgba(68,136,255,0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(68,136,255,0.02) 1px, transparent 1px);
   background-size: 40px 40px;
   pointer-events: none; z-index: 0;
 }
@@ -66,3 +68,4 @@ input[type=range]::-webkit-slider-thumb {
 @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }

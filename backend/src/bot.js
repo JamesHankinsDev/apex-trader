@@ -3,6 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
+const scalp = require('./scalpEngine');
+const { recordScalpTrade } = require('./scalpLog');
 const BenchmarkTracker = require('./benchmark');
 const benchmark = new BenchmarkTracker();
 const cryptoStream = require('./crypto-stream');
@@ -84,7 +86,8 @@ class TradingBot {
       takeProfit: parseFloat(process.env.TAKE_PROFIT) || 0.15,
       rsiBuy: parseInt(process.env.RSI_BUY_BELOW) || 35,
       rsiSell: parseInt(process.env.RSI_SELL_ABOVE) || 70,
-      scanInterval: parseInt(process.env.SCAN_INTERVAL_SECONDS) || 60,
+      scanInterval: parseInt(process.env.SCAN_INTERVAL_SECONDS) || 30,
+      scalpTradeSize: parseFloat(process.env.SCALP_TRADE_SIZE) || 25,
       watchlist: (process.env.WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD,DOGE/USD,AVAX/USD').split(','),
       bearWatchlist: process.env.WATCHLIST_BEAR
         ? process.env.WATCHLIST_BEAR.split(',')
@@ -475,7 +478,7 @@ class TradingBot {
         // Check exits for open positions using live price
         if (this.state.positions[symbol] && livePrice > 0) {
           this.state.positions[symbol].livePrice = livePrice;
-          await this.checkExit(symbol, livePrice);
+          await this.checkExit(symbol, livePrice, bars);
         }
       } catch (err) {
         this.addEvent('danger', `Error scanning ${symbol}: ${err.message}`);
@@ -532,11 +535,11 @@ class TradingBot {
               );
               await this.executeEntry(candidate, {
                 sizeFactor: 0.25,
-                takeProfitPct: 0.05,
-                regimeLabel: 'Bear Rally',
+                takeProfitPct: 0.015,
+                regimeLabel: 'Bear Rally Scalp',
                 bearRally: true,
                 btcRallyHigh: gate.btcPrice,
-                maxHoldHours: 24,
+                maxHoldMs: 25 * 60 * 1000, // 25 minutes
               });
               openCount++;
               break; // Max 1 bear rally position
@@ -594,24 +597,26 @@ class TradingBot {
       const tightStops  = isBullWeakening;
       const regimeLabel = this._currentDetailedRegime?.label;
 
-      // Bull mode — entry logic (only on bull watchlist coins)
+      // Bull mode — SWING entry logic (only on bull watchlist coins)
+      // Scalp positions do NOT count toward the swing position limit
       const bullEntrySet = new Set(entryWatchlist);
-      let openCount = Object.keys(this.state.positions).length;
+      let swingCount = Object.values(this.state.positions).filter(p => !p.scalpMode && !p.bearRally).length;
       for (const candidate of signals) {
-        if (openCount >= this.config.maxPositions) {
-          break;
-        }
+        if (swingCount >= this.config.maxPositions) break;
         if (!bullEntrySet.has(candidate.symbol)) continue;
-        if (candidate.score < effectiveThreshold || candidate.price <= 0) {
-          continue;
-        }
-        if (this.state.positions[candidate.symbol]) {
-          continue;
-        }
-        // Skip entry when bar data is stale — indicators are unreliable
+        if (candidate.score < effectiveThreshold || candidate.price <= 0) continue;
         if (candidate.stale) {
           this.addEvent('warning', `Skipping ${candidate.symbol} — bar data is ${candidate.barAgeMin}min stale`);
           continue;
+        }
+
+        // If a scalp is open on this coin, close it first before opening the swing
+        const existingPos = this.state.positions[candidate.symbol];
+        if (existingPos && existingPos.scalpMode) {
+          this.addEvent('info', `Closing scalp on ${candidate.symbol} — swing entry triggered`);
+          await this.executeExit(candidate.symbol, candidate.price, 'SCALP CLOSED FOR SWING UPGRADE');
+        } else if (existingPos) {
+          continue; // Non-scalp position already open on this coin
         }
 
         // Multi-timeframe confirmation: check 1h trend before entering
@@ -629,7 +634,27 @@ class TradingBot {
         }
 
         await this.executeEntry(candidate, { sizeFactor, tightStops, regimeLabel });
-        openCount++;
+        swingCount++;
+      }
+
+      // Bull mode — SCALP entry logic (1-min SMA dip, parallel to swings)
+      for (const candidate of signals) {
+        if (!bullEntrySet.has(candidate.symbol)) continue;
+        if (candidate.price <= 0 || candidate.stale) continue;
+        // No scalp if any position (swing or scalp) is already open on this coin
+        if (this.state.positions[candidate.symbol]) continue;
+
+        const sym = candidate.symbol.includes('/') ? candidate.symbol : candidate.symbol.replace(/USD$/, '/USD');
+        const minBars = allBars.get(sym) || [];
+        if (minBars.length < scalp.DEFAULTS.smaPeriod) continue;
+
+        const closes = minBars.map(b => b.c);
+        const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, candidate.price);
+        const { shouldEnter, smaDip } = scalp.evalEntry(candidate.price, sma20, rsi14);
+
+        if (shouldEnter) {
+          await this.executeScalpEntry(candidate, sma20, rsi14, smaDip, regimeLabel);
+        }
       }
       }
     }
@@ -719,6 +744,7 @@ class TradingBot {
         targetPrice: fillPrice * (1 + takeProfitPct),
         ...(opts.bearRally && { bearRally: true, btcRallyHigh: opts.btcRallyHigh || this._lastBtcPrice || 0 }),
         ...(opts.maxHoldHours && { maxHoldHours: opts.maxHoldHours }),
+        ...(opts.maxHoldMs && { maxHoldMs: opts.maxHoldMs }),
       };
 
       const regimeTag = opts.regimeLabel ? ` [${opts.regimeLabel}]` : '';
@@ -734,6 +760,50 @@ class TradingBot {
 
     } catch (err) {
       this.addEvent('danger', `Order failed for ${symbol}: ${err.message}`);
+    }
+  }
+
+  // ─── SCALP ENTRY (BULL MODE) ────────────────────────────────
+
+  async executeScalpEntry(signal, sma20, rsi, smaDip, regimeLabel) {
+    const { symbol, price } = signal;
+    const notional = Math.min(this.config.scalpTradeSize, this.state.cashBalance);
+    if (notional < 1) return;
+
+    try {
+      const order = await alpaca.placeOrder(
+        this.config.apiKey, this.config.secretKey, this.config.mode,
+        { symbol, side: 'buy', notional }
+      );
+
+      const fill = await getFillPrice(
+        this.config.apiKey, this.config.secretKey, this.config.mode, order.id, price
+      );
+
+      if (fill.status === 'canceled' || fill.status === 'expired' || fill.status === 'dry-run') {
+        this.addEvent('warning',
+          `Scalp order ${fill.status} for ${symbol} | $${notional.toFixed(2)} @ ~$${price.toFixed(4)} — no position opened`
+        );
+        return;
+      }
+
+      const fillPrice = fill.price;
+      const entryCost = notional * SPREAD_COST_PCT;
+      const qty = (notional - entryCost) / fillPrice;
+
+      this.state.positions[symbol] = {
+        symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
+        entryTime: new Date().toISOString(),
+        scalpMode: true,
+      };
+
+      const regimeTag = regimeLabel ? ` [${regimeLabel}]` : '';
+      this.addEvent('success',
+        `SCALP BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | SMA $${sma20.toFixed(4)} | RSI ${rsi.toFixed(1)} | dip ${smaDip}%${regimeTag}`
+      );
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+    } catch (err) {
+      this.addEvent('danger', `Scalp order failed for ${symbol}: ${err.message}`);
     }
   }
 
@@ -820,25 +890,87 @@ class TradingBot {
 
   // ─── EXIT ─────────────────────────────────────────────────────
 
-  async checkExit(symbol, currentPrice) {
+  async checkExit(symbol, currentPrice, minuteBars) {
     const pos = this.state.positions[symbol];
     if (!pos) return;
 
-    // Bear rally: BTC hard stop — exit if BTC drops 3% from the rally high at entry
-    if (pos.bearRally && pos.btcRallyHigh > 0) {
-      const btcNow = this._lastBtcPrice || 0;
-      // Update BTC rally high water mark
-      if (btcNow > pos.btcRallyHigh) pos.btcRallyHigh = btcNow;
-      if (btcNow > 0 && btcNow <= pos.btcRallyHigh * 0.97) {
+    const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+    const pnlPct = ((currentPrice - pos.entryPrice) / pos.entryPrice * 100);
+    const pnlTag = `P&L ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%`;
+
+    // ── BEAR RALLY SCALP EXIT HIERARCHY ──────────────────────
+    if (pos.bearRally) {
+      const holdMin = (holdMs / 60000).toFixed(1);
+
+      // (1) BTC hard stop — exit if BTC drops 3% from rally high (UNCHANGED)
+      if (pos.btcRallyHigh > 0) {
+        const btcNow = this._lastBtcPrice || 0;
+        if (btcNow > pos.btcRallyHigh) pos.btcRallyHigh = btcNow;
+        if (btcNow > 0 && btcNow <= pos.btcRallyHigh * 0.97) {
+          await this.executeExit(symbol, currentPrice,
+            `BEAR RALLY BTC DROP EXIT — BTC $${btcNow.toFixed(0)} dropped 3% from rally high $${pos.btcRallyHigh.toFixed(0)} | ${holdMin}min | ${pnlTag}`
+          );
+          return;
+        }
+      }
+
+      // (2) SMA reversion — price returned to 20-period 1-min SMA
+      if (minuteBars && minuteBars.length >= scalp.DEFAULTS.smaPeriod) {
+        const closes = minuteBars.map(b => b.c);
+        const { sma: sma20 } = scalp.computeIndicators(closes, currentPrice);
+        if (currentPrice >= sma20) {
+          await this.executeExit(symbol, currentPrice,
+            `BEAR RALLY SMA REVERSION — price $${currentPrice.toFixed(4)} >= SMA $${sma20.toFixed(4)} | ${holdMin}min | ${pnlTag}`
+          );
+          return;
+        }
+      }
+
+      // (3) TP hit — 1.5%
+      if (currentPrice >= pos.targetPrice) {
         await this.executeExit(symbol, currentPrice,
-          `BEAR RALLY BTC STOP (BTC $${btcNow.toFixed(0)} dropped 3% from rally high $${pos.btcRallyHigh.toFixed(0)})`
+          `BEAR RALLY TP HIT — price $${currentPrice.toFixed(4)} >= target $${pos.targetPrice.toFixed(4)} | ${holdMin}min | ${pnlTag}`
         );
         return;
       }
+
+      // (4) Time exit — 25 minutes
+      const maxHoldMs = pos.maxHoldMs || 25 * 60 * 1000;
+      if (holdMs >= maxHoldMs) {
+        await this.executeExit(symbol, currentPrice,
+          `BEAR RALLY TIME EXIT — ${holdMin}min > ${(maxHoldMs / 60000).toFixed(0)}min max | ${pnlTag}`
+        );
+        return;
+      }
+
+      // (5) Stop loss — use position's stop price
+      if (currentPrice <= pos.stopPrice) {
+        await this.executeExit(symbol, currentPrice,
+          `BEAR RALLY STOP LOSS — price $${currentPrice.toFixed(4)} <= stop $${pos.stopPrice.toFixed(4)} | ${holdMin}min | ${pnlTag}`
+        );
+        return;
+      }
+
+      return; // Bear rally positions only use the above exits
     }
 
-    // Time-based exit: use per-position override (e.g. 24h for bear rally) or config default
-    const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+    // ── BULL SCALP EXIT HIERARCHY ────────────────────────────
+    if (pos.scalpMode) {
+      if (minuteBars && minuteBars.length >= scalp.DEFAULTS.smaPeriod) {
+        const closes = minuteBars.map(b => b.c);
+        const { sma } = scalp.computeIndicators(closes, currentPrice);
+        const exitResult = scalp.evalExit(pos, currentPrice, sma);
+        if (exitResult) {
+          await this.executeExit(symbol, currentPrice, exitResult.reason);
+          return;
+        }
+      }
+      return; // Scalp positions only use shared engine exits
+    }
+
+    // ── STANDARD EXIT LOGIC (swing + bear range positions) ───
+
+    // Time-based exit
     const holdHours = holdMs / (1000 * 60 * 60);
     const maxHoldHours = pos.maxHoldHours || this.config.maxHoldHours;
     if (holdHours >= maxHoldHours) {
@@ -854,7 +986,7 @@ class TradingBot {
     // Profit giveback: if we've gained, sell when we lose X% of peak profit
     const peakPnl = (pos.highPrice - pos.entryPrice) / pos.entryPrice;
     const currentPnl = (currentPrice - pos.entryPrice) / pos.entryPrice;
-    if (peakPnl > 0.01 && currentPnl > 0) {  // only when peak gain > 1% and still in profit
+    if (peakPnl > 0.01 && currentPnl > 0) {
       const givebackPct = 1 - (currentPnl / peakPnl);
       if (givebackPct >= this.config.profitGiveback) {
         await this.executeExit(symbol, currentPrice, `PROFIT PROTECT (peak +${(peakPnl * 100).toFixed(1)}% → +${(currentPnl * 100).toFixed(1)}%)`);
@@ -868,7 +1000,6 @@ class TradingBot {
     if (shouldStop || shouldTakeProfit) {
       const reason = shouldTakeProfit ? 'TAKE PROFIT' : 'STOP LOSS';
       await this.executeExit(symbol, currentPrice, reason);
-      // Bear mode: set cooldown on stop loss (channel broke), not on take profit
       if (pos.bearMode && shouldStop && !shouldTakeProfit) {
         setBearCooldown(symbol);
       }
@@ -921,19 +1052,38 @@ class TradingBot {
       else if (reason.includes('STOP LOSS')) perfExitReason = 'stopLoss';
       else if (reason.includes('PROFIT PROTECT')) perfExitReason = 'takeProfit';
       else if (reason.includes('TIME EXIT')) perfExitReason = 'timeExit';
+      const exitTime = new Date().toISOString();
       recordPerfTrade({
         bot: 'main',
         coin: symbol,
         entryPrice: pos.entryPrice,
         exitPrice,
         entryTime: pos.entryTime,
-        exitTime: new Date().toISOString(),
+        exitTime,
         pnlPct: parseFloat(pnlPct.toFixed(2)),
         pnlUsd: parseFloat(pnl.toFixed(2)),
         exitReason: perfExitReason,
         regime: pos.bearMode ? 'bear' : 'bull',
         type: pos.bearMode ? 'bear_range_trade' : 'momentum',
       });
+
+      // Scalp trade log (bull scalps + bear rally scalps)
+      if (pos.scalpMode || pos.bearRally) {
+        recordScalpTrade({
+          bot: 'main',
+          coin: symbol,
+          entryPrice: pos.entryPrice,
+          exitPrice,
+          entryTime: pos.entryTime,
+          exitTime,
+          pnlUsd: parseFloat(pnl.toFixed(2)),
+          pnlPct: parseFloat(pnlPct.toFixed(2)),
+          exitReason: perfExitReason,
+          smaAtEntry: pos.sma20 || 0,
+          rsiAtEntry: pos.rsi || 0,
+          notional: pos.notional,
+        });
+      }
 
       delete this.state.positions[symbol];
       savePersistedState(this.state);
@@ -1071,6 +1221,7 @@ class TradingBot {
         maxHoldHours: this.config.maxHoldHours,
         entryScoreThreshold: this.config.entryScoreThreshold,
         profitGiveback: this.config.profitGiveback,
+        scalpTradeSize: this.config.scalpTradeSize,
       },
       portfolioValue: this.state.portfolioValue,
       cashBalance: this.state.cashBalance,

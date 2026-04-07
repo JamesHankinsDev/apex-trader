@@ -8,6 +8,7 @@ const experiment2Bot = require('./experiment2-bot');
 const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { getChannelData } = require('./bearStrategy');
 const { getPerformanceStats, getWeeklySnapshots } = require('./performance');
+const { getScalpLogStatus } = require('./scalpLog');
 const alpaca = require('./alpaca');
 
 const app = express();
@@ -253,6 +254,11 @@ app.get('/api/leaderboard', (req, res) => {
     leadMetric,
     weeklySnapshots: getWeeklySnapshots(),
   });
+});
+
+// ─── SCALP LOG ───────────────────────────────────────────────
+app.get('/api/scalp-log', (req, res) => {
+  res.json(getScalpLogStatus());
 });
 
 // ─── START SERVER ─────────────────────────────────────────────

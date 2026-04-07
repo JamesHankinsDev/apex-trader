@@ -1,6 +1,19 @@
 {
   "startValue": 100,
-  "wins": 1,
-  "losses": 0,
-  "positions": {}
+  "wins": 6,
+  "losses": 6,
+  "positions": {
+    "ETH/USD": {
+      "symbol": "ETH/USD",
+      "entryPrice": 2109.883842685,
+      "qty": 0.037871214,
+      "notional": 79.90386252146598,
+      "entryCost": 0.11985579378219897,
+      "entryTime": "2026-04-07T01:38:29.228Z",
+      "orderId": null,
+      "livePrice": 2099.98,
+      "sma20": 2106.3691500000004,
+      "rsi": 30.073522391100212
+    }
+  }
 }

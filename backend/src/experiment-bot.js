@@ -1,14 +1,16 @@
-// src/experiment-bot.js - Mean Reversion + Momentum Hybrid Experiment Bot
-// Contrarian entry (buy dips) with momentum-aware exit (ride strength, bail on exhaustion)
+// src/experiment-bot.js - 1-Minute Scalp Bot (Bull) + Dead Cat Bounce (Bear)
+// Bull: buys when price dips below 20-bar SMA on 1-min candles, exits on SMA revert / SL / time
+// Bear: 5-condition dead cat bounce (unchanged)
 const fs = require('fs');
 const path = require('path');
 const alpaca = require('./alpaca');
-const { evaluate } = require('./mean-reversion-strategy');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { evaluateBearEntry1 } = require('./bearStrategy1');
 const { setBearCooldown } = require('./bearStrategy');
 const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
+const scalp = require('./scalpEngine');
+const { recordScalpTrade } = require('./scalpLog');
 const BenchmarkTracker = require('./benchmark');
 const benchmark = new BenchmarkTracker();
 
@@ -55,16 +57,14 @@ class ExperimentBot {
     this.config = {
       apiKey: process.env.EXPERIMENT_1_ALPACA_API_KEY || '',
       secretKey: process.env.EXPERIMENT_1_ALPACA_SECRET_KEY || '',
-      mode: 'paper', // Always paper for experiments
+      mode: 'paper',
       watchlist: (process.env.EXPERIMENT_1_WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD').split(','),
       bearWatchlist: process.env.EXPERIMENT_1_WATCHLIST_BEAR
         ? process.env.EXPERIMENT_1_WATCHLIST_BEAR.split(',')
         : null,
-      positionSize: parseFloat(process.env.EXPERIMENT_1_POSITION_SIZE) || 0.33,
-      dipThreshold: parseFloat(process.env.EXPERIMENT_1_DIP_THRESHOLD) || 0.015,
+      scalpTradeSize: parseFloat(process.env.SCALP_TRADE_SIZE) || 25,
       maxPositions: parseInt(process.env.EXPERIMENT_1_MAX_POSITIONS) || 2,
       scanInterval: parseInt(process.env.EXPERIMENT_1_SCAN_INTERVAL_SECONDS) || 30,
-      maxHoldHours: parseInt(process.env.EXPERIMENT_1_MAX_HOLD_HOURS) || 4,
     };
 
     const saved = loadState();
@@ -124,7 +124,6 @@ class ExperimentBot {
         this.state.todayStartValue = this.state.portfolioValue;
       }
 
-      // Load trade history from Alpaca
       await this.syncTradeHistory();
       await this.syncPositions();
 
@@ -132,7 +131,6 @@ class ExperimentBot {
       this.state.startedAt = new Date().toISOString();
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
 
-      // Initialize benchmarks with 50-day lookback (aligns with 50-SMA gate)
       try {
         const apiKey = this.config.apiKey, secretKey = this.config.secretKey;
         await benchmark.initialize(
@@ -144,15 +142,14 @@ class ExperimentBot {
         console.error('Exp1 benchmark initialization failed:', err.message);
       }
 
-      // Connect WebSocket stream for real-time prices
       this.streamHandle = cryptoStream.connect(
         this.config.apiKey, this.config.secretKey, this.config.watchlist,
         (type, msg) => this.addEvent(type, `[Stream] ${msg}`)
       );
 
       this.running = true;
-      this.addEvent('success', 'Experiment started (Mean Reversion + Momentum Hybrid)');
-      this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)} | Dip threshold: ${(this.config.dipThreshold * 100).toFixed(1)}%`);
+      this.addEvent('success', 'Experiment started (1-Min Scalp + Dead Cat Bounce)');
+      this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)} | Scalp size: $${this.config.scalpTradeSize}`);
 
       this.runScan();
       this.scanTimer = setInterval(() => this.runScan(), this.config.scanInterval * 1000);
@@ -270,13 +267,12 @@ class ExperimentBot {
     if (!this.running) return;
     this.state.lastScan = new Date().toISOString();
 
-    // Determine regime first to select the right watchlist (cached, essentially free)
     const gate = await isBtcGateOpen(this.config.apiKey, this.config.secretKey, this.streamHandle);
     const isBear = !gate.open;
     const entryWatchlist = isBear && this.config.bearWatchlist
       ? this.config.bearWatchlist : this.config.watchlist;
 
-    // Phase 1: log detailed regime at each scan (observation only)
+    // Log detailed regime
     try {
       const detailed = await getDetailedRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
       console.log(`[EXP1][REGIME] ${detailed.label} | ADX ${detailed.signals.adx} RSI ${detailed.signals.rsi} F&G ${detailed.signals.fng} Gap ${detailed.signals.gapPct}%`);
@@ -284,29 +280,27 @@ class ExperimentBot {
         this.addEvent('info', `[REGIME] Transition: ${this._lastDetailedRegime} → ${detailed.state} (${detailed.label})`);
       }
       this._lastDetailedRegime = detailed.state;
-      this._currentDetailedRegime = detailed; // Phase 2: full object for entry logic
+      this._currentDetailedRegime = detailed;
     } catch (err) {
       console.log(`[EXP1][REGIME] fetch failed: ${err.message}`);
     }
 
-    // Merge with open position symbols so exits are always monitored
+    // Merge open positions into watchlist so exits are always monitored
     const openSymbols = Object.keys(this.state.positions);
     const scanWatchlist = [...new Set([...entryWatchlist, ...openSymbols])];
     this.state.activeWatchlist = entryWatchlist;
 
     const signals = [];
 
-    // Batch fetch: get hourly bars, minute bars, and prices in 3 API calls instead of 3N
-    let allHourlyBars, allMinuteBars, allPrices;
+    // Fetch 1-min bars (20 bars for SMA) + hourly bars (for bear strategy) + live prices
+    let allMinuteBars, allHourlyBars, allPrices;
     try {
-      [allHourlyBars, allMinuteBars, allPrices] = await Promise.all([
+      [allMinuteBars, allHourlyBars, allPrices] = await Promise.all([
+        scalp.fetchCandlesMulti(this.config.apiKey, this.config.secretKey, scanWatchlist),
+        // Hourly bars still needed for bear mode enrichment
         alpaca.getCryptoBarsMulti(
           this.config.apiKey, this.config.secretKey,
           scanWatchlist, '1Hour', 24, TWENTY_FOUR_HOURS_MS
-        ),
-        alpaca.getCryptoBarsMulti(
-          this.config.apiKey, this.config.secretKey,
-          scanWatchlist, '1Min', 10
         ),
         alpaca.getLatestCryptoPricesMulti(
           this.config.apiKey, this.config.secretKey,
@@ -321,21 +315,45 @@ class ExperimentBot {
     for (const symbol of scanWatchlist) {
       try {
         const sym = symbol.includes('/') ? symbol : symbol.replace(/USD$/, '/USD');
-        const hourlyBars = allHourlyBars.get(sym) || [];
         const minuteBars = allMinuteBars.get(sym) || [];
+        const hourlyBars = allHourlyBars.get(sym) || [];
 
         const livePrice = allPrices.get(sym) || 0;
         if (!livePrice || livePrice <= 0) continue;
 
-        const signal = evaluate(symbol, hourlyBars, livePrice, minuteBars, this.config.dipThreshold);
+        // ── Compute scalp indicators from 1-min bars ──
+        const closes = minuteBars.map(b => b.c);
+        const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, livePrice);
+        const { shouldEnter: belowSmaAndRsi } = scalp.evalEntry(livePrice, sma20, rsi14);
+        const belowSma = livePrice < sma20 * (1 - scalp.DEFAULTS.dipPct);
 
-        // Enrich with bar data for bear strategy
+        // Volume of the most recent 1-min bar (used for fade detection)
+        const entryCandle = minuteBars.length > 0 ? minuteBars[minuteBars.length - 1] : null;
+        const entryVolume = entryCandle ? entryCandle.v : 0;
+
+        const signal = {
+          symbol,
+          price: livePrice,
+          sma20: parseFloat(sma20.toFixed(4)),
+          rsi: parseFloat(rsi14.toFixed(1)),
+          belowSma,
+          smaDip: parseFloat(((livePrice - sma20) / sma20 * 100).toFixed(3)),
+          signal: belowSmaAndRsi ? 'buy' : 'hold',
+          entryVolume,
+          reasons: [],
+        };
+
+        if (belowSma) signal.reasons.push(`Price ${signal.smaDip}% below SMA20`);
+        if (rsi14 < SCALP_RSI_THRESHOLD) signal.reasons.push(`RSI ${rsi14.toFixed(1)} < ${SCALP_RSI_THRESHOLD}`);
+
+        // Enrich with hourly bar data for bear strategy
         if (hourlyBars && hourlyBars.length > 0) {
           const lastBar = hourlyBars[hourlyBars.length - 1];
           signal.rsi14 = signal.rsi;
           signal.volume = lastBar.v;
           const volBars = hourlyBars.slice(-20);
           signal.avgVolume20 = volBars.reduce((a, b) => a + b.v, 0) / volBars.length;
+          signal.volumeRatio = signal.avgVolume20 > 0 ? lastBar.v / signal.avgVolume20 : 1;
           signal.open = lastBar.o;
           signal.high = lastBar.h;
           signal.low = lastBar.l;
@@ -344,42 +362,95 @@ class ExperimentBot {
 
         signals.push(signal);
 
+        // ── Check exits for open bull positions ──
         const pos = this.state.positions[symbol];
-        if (pos) {
+        if (pos && !pos.bearMode) {
           pos.livePrice = livePrice;
-          pos.avg24h = signal.avg24h;
-          pos.deviation = signal.deviation;
-          pos.trend = signal.trend;
-          pos.consecutiveDips = signal.consecutiveDips;
-          pos.rsi = signal.rsi;
-          pos.minuteROC = signal.minuteROC;
-          pos.volumeFading = signal.volumeFading;
+          pos.sma20 = sma20;
+          pos.rsi = rsi14;
 
-          // Bear mode: stop loss and take profit
-          if (pos.bearMode && livePrice > 0) {
-            if (livePrice <= pos.stopPrice) {
-              await this.executeExit(symbol, livePrice, 'BEAR STOP LOSS');
-              setBearCooldown(symbol);
+          const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+          const holdMin = (holdMs / 60000).toFixed(1);
+          const pnlPct = ((livePrice - pos.entryPrice) / pos.entryPrice * 100);
+          const pnlTag = `P&L ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%`;
+
+          if (pos.scalpMode) {
+            // ── SCALP EXIT HIERARCHY (first signal wins) ──
+
+            // (1) SMA target / stop loss / time — shared engine
+            const exitResult = scalp.evalExit(pos, livePrice, sma20);
+            if (exitResult) {
+              await this.executeExit(symbol, livePrice, exitResult.reason);
               continue;
             }
-            if (livePrice >= pos.targetPrice) {
-              await this.executeExit(symbol, livePrice, 'BEAR TAKE PROFIT');
-              // No cooldown on take profit — coin can be re-entered
+
+            // (2) RSI > 60 on 1-min — momentum exhausted, dip is over (Exp1-specific)
+            if (rsi14 > 60) {
+              const holdMin = ((Date.now() - new Date(pos.entryTime).getTime()) / 60000).toFixed(1);
+              const pnlPct = ((livePrice - pos.entryPrice) / pos.entryPrice * 100);
+              await this.executeExit(symbol, livePrice,
+                `SCALP RSI EXIT — RSI ${rsi14.toFixed(1)} > 60 | SMA $${sma20.toFixed(4)} | ${holdMin}min | P&L ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%`
+              );
+              continue;
+            }
+
+            // (3) Volume fading — Exp1-specific (3 consecutive low-vol candles)
+            if (pos.entryVolume > 0 && minuteBars.length > 0) {
+              const currentVol = minuteBars[minuteBars.length - 1].v;
+              if (currentVol < pos.entryVolume * 0.5) {
+                pos.fadingCount = (pos.fadingCount || 0) + 1;
+              } else {
+                pos.fadingCount = 0;
+              }
+              if (pos.fadingCount >= 3) {
+                const holdMin = ((Date.now() - new Date(pos.entryTime).getTime()) / 60000).toFixed(1);
+                const pnlPct = ((livePrice - pos.entryPrice) / pos.entryPrice * 100);
+                await this.executeExit(symbol, livePrice,
+                  `SCALP VOL FADE — vol ${currentVol.toFixed(0)} < 50% of entry ${pos.entryVolume.toFixed(0)} for 3 scans | ${holdMin}min | P&L ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%`
+                );
+                continue;
+              }
+            }
+          } else {
+            // ── LEGACY SWING EXIT (for any non-scalp bull positions) ──
+
+            // Stop loss: 0.65%
+            const stopPrice = pos.entryPrice * (1 - scalp.DEFAULTS.stopLoss);
+            if (livePrice <= stopPrice) {
+              await this.executeExit(symbol, livePrice,
+                `SWING STOP LOSS — price $${livePrice.toFixed(4)} | ${holdMin}min | ${pnlTag}`
+              );
+              continue;
+            }
+
+            // Time exit: 4h for legacy swing positions
+            if (holdMs >= 4 * 60 * 60 * 1000) {
+              await this.executeExit(symbol, livePrice,
+                `SWING TIME EXIT — ${holdMin}min | ${pnlTag}`
+              );
               continue;
             }
           }
+        }
 
-          // Exit: momentum exhaustion (multi-signal confirmation)
-          if (signal.signal === 'sell') {
-            await this.executeExit(symbol, livePrice, `MOMENTUM EXIT (+${signal.deviation.toFixed(2)}%, ${signal.consecutiveDips} dips, RSI ${signal.rsi})`);
+        // ── Check exits for open bear positions ──
+        if (pos && pos.bearMode && livePrice > 0) {
+          pos.livePrice = livePrice;
+
+          if (livePrice <= pos.stopPrice) {
+            await this.executeExit(symbol, livePrice, 'BEAR STOP LOSS');
+            setBearCooldown(symbol);
+            continue;
+          }
+          if (livePrice >= pos.targetPrice) {
+            await this.executeExit(symbol, livePrice, 'BEAR TAKE PROFIT');
             continue;
           }
 
-          // Time exit (36h for bear dead cat, normal maxHoldHours for bull)
+          // Bear time exit: 36h
           const holdHours = (Date.now() - new Date(pos.entryTime).getTime()) / (1000 * 60 * 60);
-          const maxHold = pos.bearMode ? 36 : this.config.maxHoldHours;
-          if (holdHours >= maxHold) {
-            await this.executeExit(symbol, livePrice, `TIME EXIT (${Math.round(holdHours)}h)`);
+          if (holdHours >= 36) {
+            await this.executeExit(symbol, livePrice, `BEAR TIME EXIT (${Math.round(holdHours)}h)`);
             continue;
           }
         }
@@ -390,7 +461,7 @@ class ExperimentBot {
 
     this.state.signals = signals;
 
-    // BTC macro gate: skip entries if BTC is below 50-day SMA (reuse pre-fetched gate)
+    // ── BEAR MODE: dead cat bounce entries (unchanged) ──────
     if (!gate.open) {
       if (this._lastGateOpen !== false) {
         this.addEvent('warning', `[BTC GATE] Closed — BTC $${gate.btcPrice} below 50-SMA $${gate.sma50} — switching to BEAR mode`);
@@ -400,19 +471,12 @@ class ExperimentBot {
       const detailedState = this._currentDetailedRegime?.state;
       const regimeLabel = this._currentDetailedRegime?.label;
 
-      // FLAT: no edge
       if (detailedState === 'FLAT') {
-        // sit out — no entries
-
-      // BEAR_RALLY: Exp1 sits out — dead cat bounce needs exhaustion, not active rally
+        // sit out
       } else if (detailedState === 'BEAR_RALLY') {
         this.addEvent('info', `[EXP1][REGIME] ${regimeLabel} — sitting out. Dead cat bounce needs exhaustion, not an active rally.`);
-
-      // BEAR_EXHAUSTED: sit out — wait for higher conviction (5-condition dead cat setup)
       } else if (detailedState === 'BEAR_EXHAUSTED') {
         this.addEvent('info', `[EXP1][REGIME] ${regimeLabel} — sitting out. Waiting for all dead cat conditions to align.`);
-
-      // CAPITULATION / BEAR_TRENDING: dead cat bounce entries — all conditions checked by evaluateBearEntry1
       } else {
         const regime = await getMarketRegime(this.config.apiKey, this.config.secretKey, this.streamHandle);
         if (regime.regime === 'bear') {
@@ -431,31 +495,31 @@ class ExperimentBot {
           }
         }
       }
+
+    // ── BULL MODE: 1-min scalp entries ──────────────────────
     } else {
       if (this._lastGateOpen !== true) {
         this.addEvent('success', `[BTC GATE] Open — BTC $${gate.btcPrice} above 50-SMA $${gate.sma50} — switching to BULL mode`);
         this._lastGateOpen = true;
       }
 
-      // Phase 2: regime-aware entry logic
       const regime2 = this._currentDetailedRegime?.state;
       const regimeLabel = this._currentDetailedRegime?.label;
 
-      // BULL_WEAKENING: Exp1 sits out — mean reversion needs momentum to work
+      // BULL_WEAKENING: sit out — scalps need clean momentum
       if (regime2 === 'BULL_WEAKENING') {
-        this.addEvent('info', `[EXP1][REGIME] ${regimeLabel} — sitting out (no edge for mean reversion in weakening trend)`);
+        this.addEvent('info', `[EXP1][REGIME] ${regimeLabel} — sitting out (no edge for scalps in weakening trend)`);
       } else {
-        // Bull mode — buy dips (only on bull watchlist coins)
-        // BULL_PULLBACK: normal behavior (mean reversion is already buy-the-dip)
         const entrySet = new Set(entryWatchlist);
         let openCount = Object.keys(this.state.positions).length;
         for (const sig of signals) {
           if (openCount >= this.config.maxPositions) break;
           if (!entrySet.has(sig.symbol)) continue;
           if (sig.signal !== 'buy') continue;
+          // Don't open a scalp if any position (scalp or swing) is already open on this coin
           if (this.state.positions[sig.symbol]) continue;
 
-          await this.executeEntry(sig, { regimeLabel });
+          await this.executeScalpEntry(sig, { regimeLabel });
           openCount++;
         }
       }
@@ -476,7 +540,6 @@ class ExperimentBot {
       this.state.equityHistory.push({ t: Date.now(), v: this.state.portfolioValue });
       if (this.state.equityHistory.length > 2000) this.state.equityHistory.shift();
 
-      // Update benchmarks with live prices from signals
       const currentPrices = {};
       for (const sig of this.state.signals) {
         if (sig.price > 0) currentPrices[sig.symbol] = sig.price;
@@ -486,12 +549,11 @@ class ExperimentBot {
     } catch {}
   }
 
-  // ─── ENTRY ──────────────────────────────────────────────────
+  // ─── SCALP ENTRY (BULL MODE) ───────────────────────────────
 
-  async executeEntry(signal, opts = {}) {
-    const { symbol, price } = signal;
-    const targetNotional = this.state.portfolioValue * this.config.positionSize;
-    const notional = Math.min(targetNotional, this.state.cashBalance);
+  async executeScalpEntry(signal, opts = {}) {
+    const { symbol, price, sma20, rsi } = signal;
+    const notional = Math.min(this.config.scalpTradeSize, this.state.cashBalance);
     if (notional < 1) return;
 
     try {
@@ -506,14 +568,9 @@ class ExperimentBot {
 
       if (fill.status === 'canceled' || fill.status === 'expired' || fill.status === 'dry-run') {
         this.addEvent('warning',
-          `Order ${fill.status} for ${symbol} | attempted $${notional.toFixed(2)} @ ~$${price.toFixed(4)} — no position opened`
+          `Scalp order ${fill.status} for ${symbol} | $${notional.toFixed(2)} @ ~$${price.toFixed(4)} — no position opened`
         );
         return;
-      }
-      if (fill.status === 'unknown') {
-        this.addEvent('warning',
-          `Order status unknown for ${symbol} (${order.id}) | attempted $${notional.toFixed(2)} — position may not have filled`
-        );
       }
 
       const fillPrice = fill.price;
@@ -523,25 +580,27 @@ class ExperimentBot {
       this.state.positions[symbol] = {
         symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
         entryTime: new Date().toISOString(),
-        avg24h: signal.avg24h,
-        deviation: signal.deviation,
+        sma20, rsi,
+        entryVolume: signal.entryVolume || 0,
+        fadingCount: 0,
+        scalpMode: true,
       };
 
       const regimeTag = opts.regimeLabel ? ` [${opts.regimeLabel}]` : '';
       this.addEvent('success',
-        `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.deviation.toFixed(2)}% below avg | RSI ${signal.rsi} | ${signal.reasons.join(' · ')}${regimeTag}`
+        `SCALP BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | SMA $${sma20.toFixed(4)} | RSI ${rsi} | dip ${signal.smaDip}%${regimeTag}`
       );
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {
-      this.addEvent('danger', `Order failed for ${symbol}: ${err.message}`);
+      this.addEvent('danger', `Scalp order failed for ${symbol}: ${err.message}`);
     }
   }
 
-  // ─── BEAR ENTRY ─────────────────────────────────────────────
+  // ─── BEAR ENTRY (DEAD CAT BOUNCE — UNCHANGED) ─────────────
 
   async executeBearEntry(bearSignal, signal) {
     const { symbol, price } = signal;
-    const targetNotional = this.state.portfolioValue * this.config.positionSize;
+    const targetNotional = this.state.portfolioValue * 0.33;
     const notional = Math.min(targetNotional, this.state.cashBalance);
     if (notional < 1) return;
 
@@ -561,11 +620,6 @@ class ExperimentBot {
         );
         return;
       }
-      if (fill.status === 'unknown') {
-        this.addEvent('warning',
-          `[BEAR] Order status unknown for ${symbol} (${order.id}) | attempted $${notional.toFixed(2)} — position may not have filled`
-        );
-      }
 
       const fillPrice = fill.price;
       const entryCost = notional * SPREAD_COST_PCT;
@@ -577,8 +631,6 @@ class ExperimentBot {
       this.state.positions[symbol] = {
         symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
         entryTime: new Date().toISOString(),
-        avg24h: signal.avg24h,
-        deviation: signal.deviation,
         stopPrice,
         targetPrice,
         bearMode: true,
@@ -625,11 +677,15 @@ class ExperimentBot {
       const totalCost = (pos.entryCost || 0) + exitCost;
       const grossPnl = (exitPrice - pos.entryPrice) / pos.entryPrice * pos.notional;
       const pnl = grossPnl - totalCost;
+      const pnlPct = (exitPrice - pos.entryPrice) / pos.entryPrice * 100;
       const isWin = pnl > 0;
       if (isWin) this.state.wins++; else this.state.losses++;
 
+      const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+      const holdMin = (holdMs / 60000).toFixed(1);
+
       this.addEvent(isWin ? 'success' : 'danger',
-        `${reason}: ${symbol} @ $${exitPrice.toFixed(4)} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`
+        `SELL ${symbol} @ $${exitPrice.toFixed(4)} | ${reason} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%) | hold ${holdMin}min`
       );
       this.recordTrade({
         symbol, side: 'SELL', qty: pos.qty, price: exitPrice, notional: pos.notional,
@@ -637,25 +693,43 @@ class ExperimentBot {
       });
 
       // Record to performance tracker
-      const pnlPct = (exitPrice - pos.entryPrice) / pos.entryPrice * 100;
       let exitReason = 'timeExit';
-      if (reason.includes('TAKE PROFIT') || reason.includes('BEAR TAKE PROFIT')) exitReason = 'takeProfit';
-      else if (reason.includes('STOP LOSS') || reason.includes('BEAR STOP LOSS')) exitReason = 'stopLoss';
-      else if (reason.includes('MOMENTUM EXIT') || reason.includes('exhaustion')) exitReason = 'exhaustion';
+      if (reason.includes('TARGET HIT')) exitReason = 'takeProfit';
+      else if (reason.includes('STOP LOSS')) exitReason = 'stopLoss';
       else if (reason.includes('TIME EXIT')) exitReason = 'timeExit';
+      else if (reason.includes('TAKE PROFIT')) exitReason = 'takeProfit';
+      const exitTime = new Date().toISOString();
       recordPerfTrade({
         bot: 'exp1',
         coin: symbol,
         entryPrice: pos.entryPrice,
         exitPrice,
         entryTime: pos.entryTime,
-        exitTime: new Date().toISOString(),
+        exitTime,
         pnlPct: parseFloat(pnlPct.toFixed(2)),
         pnlUsd: parseFloat(pnl.toFixed(2)),
         exitReason,
         regime: pos.bearMode ? 'bear' : 'bull',
-        type: pos.bearType || 'mean_reversion',
+        type: pos.bearMode ? (pos.bearType || 'dead_cat') : 'scalp',
       });
+
+      // Scalp trade log
+      if (pos.scalpMode) {
+        recordScalpTrade({
+          bot: 'exp1',
+          coin: symbol,
+          entryPrice: pos.entryPrice,
+          exitPrice,
+          entryTime: pos.entryTime,
+          exitTime,
+          pnlUsd: parseFloat(pnl.toFixed(2)),
+          pnlPct: parseFloat(pnlPct.toFixed(2)),
+          exitReason,
+          smaAtEntry: pos.sma20 || 0,
+          rsiAtEntry: pos.rsi || 0,
+          notional: pos.notional,
+        });
+      }
 
       delete this.state.positions[symbol];
       saveState(this.state);
@@ -683,13 +757,11 @@ class ExperimentBot {
     return {
       running: this.running,
       mode: this.config.mode,
-      strategy: 'mean-reversion-momentum',
+      strategy: '1min-scalp',
       config: {
-        positionSize: this.config.positionSize,
-        dipThreshold: this.config.dipThreshold,
+        scalpTradeSize: this.config.scalpTradeSize,
         maxPositions: this.config.maxPositions,
         scanInterval: this.config.scanInterval,
-        maxHoldHours: this.config.maxHoldHours,
         watchlist: this.config.watchlist,
         bearWatchlist: this.config.bearWatchlist || this.config.watchlist,
         activeWatchlist: this.state.activeWatchlist || this.config.watchlist,

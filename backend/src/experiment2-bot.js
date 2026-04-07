@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluate } = require('./breakout-strategy');
+const scalp = require('./scalpEngine');
+const { recordScalpTrade } = require('./scalpLog');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { evaluateBearEntry2, addTranche, checkTrancheExit, clearTranches, getBtcAccumulationStatus } = require('./bearStrategy2');
@@ -15,6 +17,12 @@ const STATE_FILE = path.join(__dirname, '..', '.experiment2-state.json');
 const SPREAD_COST_PCT = 0.0015;
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const EIGHTY_BARS_4H_MS = 80 * FOUR_HOURS_MS; // ~13 days for 50+ bars of 4h data
+
+// Scalp config — bot-specific overrides (shared defaults come from scalpEngine)
+const HIGH_PRIORITY_SCALP = new Set(['LINK/USD', 'AVAX/USD']); // most liquid, RSI < 45
+// AAVE, DOT, UNI: RSI < 40 (stricter to account for wider spreads)
+const BTC_SCALP_MIN_GAP_MS = 60 * 60 * 1000;  // next tranche must be >60min away
+const TRANCHE_SPACING_MS = 12 * 60 * 60 * 1000; // 12h between tranches
 
 function loadState() {
   try {
@@ -70,6 +78,8 @@ class Experiment2Bot {
       scanInterval: parseInt(process.env.EXPERIMENT_2_SCAN_INTERVAL_SECONDS) || 30,
       minBalance: 15,            // Pause if balance < $15
       cooldownCandles: 2,        // Skip 2 candles after stop-loss on same coin
+      scalpTradeSize: parseFloat(process.env.SCALP_TRADE_SIZE) || 25,
+      minScalpBalance: parseFloat(process.env.MIN_SCALP_BALANCE) || 30,
     };
 
     const saved = loadState();
@@ -311,14 +321,15 @@ class Experiment2Bot {
 
     const signals = [];
 
-    // Batch fetch: get 4h bars + prices for all symbols in 2 API calls instead of 2N
-    let allBars, allPrices;
+    // Batch fetch: get 4h bars + 1-min bars + prices
+    let allBars, allMinBars, allPrices;
     try {
-      [allBars, allPrices] = await Promise.all([
+      [allBars, allMinBars, allPrices] = await Promise.all([
         alpaca.getCryptoBarsMulti(
           this.config.apiKey, this.config.secretKey,
           scanWatchlist, '4Hour', 60, EIGHTY_BARS_4H_MS
         ),
+        scalp.fetchCandlesMulti(this.config.apiKey, this.config.secretKey, scanWatchlist),
         alpaca.getLatestCryptoPricesMulti(
           this.config.apiKey, this.config.secretKey,
           scanWatchlist, this.streamHandle
@@ -358,6 +369,31 @@ class Experiment2Bot {
         const pos = this.state.positions[symbol];
         if (pos) {
           pos.livePrice = livePrice;
+
+          // ── SCALP EXIT HIERARCHY (first hit wins) ──
+          if (pos.scalpMode) {
+            const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+            const holdMin = (holdMs / 60000).toFixed(1);
+            const pnlPct = ((livePrice - pos.entryPrice) / pos.entryPrice * 100);
+            const pnlTag = `P&L ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%`;
+            const minBars = allMinBars.get(sym) || [];
+            const isBtcScalp = pos.btcScalp;
+            const exitOpts = isBtcScalp
+              ? { stopLoss: scalp.BTC_OVERRIDES.stopLoss, maxHoldMs: scalp.BTC_OVERRIDES.maxHoldMs, label: 'BTC SCALP' }
+              : {};
+
+            if (minBars.length >= scalp.DEFAULTS.smaPeriod) {
+              const closes = minBars.map(b => b.c);
+              const { sma } = scalp.computeIndicators(closes, livePrice);
+              const exitResult = scalp.evalExit(pos, livePrice, sma, exitOpts);
+              if (exitResult) {
+                await this.executeExit(symbol, livePrice, exitResult.reason);
+                continue;
+              }
+            }
+
+            continue; // Scalps only use shared engine exits
+          }
 
           // Update high water mark and trailing stop (bull mode only)
           if (!pos.bearMode && livePrice > (pos.highWaterMark || pos.entryPrice)) {
@@ -422,19 +458,69 @@ class Experiment2Bot {
           if (btcPrice && btcPrice > 0) {
             const exitSignal = checkTrancheExit(btcPrice, false);
             if (exitSignal) {
+              // Close any open BTC scalp before emergency exit
+              if (this.state.positions['BTC/USD']?.scalpMode) {
+                this.addEvent('info', 'Closing BTC scalp — tranche emergency exit triggered');
+                await this.executeExit('BTC/USD', btcPrice, 'BTC SCALP CLOSED FOR TRANCHE EXIT');
+              }
               await this.exitAllBtcTranches(btcPrice, exitSignal.reason);
             } else {
               const accStatus = getBtcAccumulationStatus();
-              // CAPITULATION: deploy immediately — skip price drop conditions
-              // BEAR_EXHAUSTED: reduce drop thresholds (3%/2% instead of 5%/4%)
-              // BEAR_TRENDING: standard conditions
               const trancheOpts =
                 detailedState === 'CAPITULATION'  ? { forceEntry: true } :
                 detailedState === 'BEAR_EXHAUSTED' ? { firstDropPct: 0.03, subsequentDropPct: 0.02 } :
                 {};
               const bearSignal = evaluateBearEntry2(regime, btcPrice, accStatus.trancheDetails || [], trancheOpts);
               if (bearSignal) {
+                // Close any open BTC scalp before deploying tranche — DCA always takes priority
+                if (this.state.positions['BTC/USD']?.scalpMode) {
+                  this.addEvent('info', 'Closing BTC scalp — tranche deployment triggered');
+                  await this.executeExit('BTC/USD', btcPrice, 'BTC SCALP CLOSED FOR TRANCHE');
+                }
                 await this.executeBtcTranche(btcPrice, bearSignal);
+              } else {
+                // ── BTC SCALP during inter-tranche gaps ──────────
+                // Only scalp when: at least 1 tranche deployed AND next tranche >60min away
+                const trancheCount = accStatus.tranches || 0;
+                const lastTranche = accStatus.trancheDetails?.length > 0
+                  ? accStatus.trancheDetails[accStatus.trancheDetails.length - 1]
+                  : null;
+                const timeSinceLastMs = lastTranche
+                  ? Date.now() - new Date(lastTranche.timestamp).getTime()
+                  : Infinity;
+                const timeUntilNextMs = TRANCHE_SPACING_MS - timeSinceLastMs;
+                const nextTrancheMin = Math.max(0, timeUntilNextMs / 60000);
+                const nextTrancheH = Math.floor(nextTrancheMin / 60);
+                const nextTrancheM = Math.round(nextTrancheMin % 60);
+                const countdown = `next tranche in ${nextTrancheH}h ${nextTrancheM}m`;
+
+                if (trancheCount >= 1 && timeUntilNextMs > BTC_SCALP_MIN_GAP_MS) {
+                  // No scalp if already have a BTC scalp or other position open on BTC
+                  if (!this.state.positions['BTC/USD']) {
+                    // Balance guard
+                    const guard = this.canOpenScalp('BTC/USD');
+                    if (guard.allowed) {
+                      const btcSym = 'BTC/USD';
+                      const minBars = allMinBars.get(btcSym) || [];
+                      if (minBars.length >= scalp.DEFAULTS.smaPeriod) {
+                        const closes = minBars.map(b => b.c);
+                        const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, btcPrice);
+                        const { shouldEnter } = scalp.evalEntry(btcPrice, sma20, rsi14, {
+                          dipPct: scalp.BTC_OVERRIDES.dipPct,
+                          rsiThreshold: scalp.BTC_OVERRIDES.rsiThreshold,
+                        });
+
+                        if (shouldEnter) {
+                          const smaDip = ((btcPrice - sma20) / sma20 * 100).toFixed(3);
+                          this.addEvent('info', `[EXP2][BEAR] BTC scalp opportunity | SMA $${sma20.toFixed(2)} RSI ${rsi14.toFixed(1)} dip ${smaDip}% | ${countdown}`);
+                          await this.executeBtcScalpEntry(btcPrice, sma20, rsi14, smaDip, countdown);
+                        }
+                      }
+                    } else {
+                      this.addEvent('info', `[EXP2] ${guard.reason} | ${countdown}`);
+                    }
+                  }
+                }
               }
             }
           }
@@ -467,14 +553,23 @@ class Experiment2Bot {
       // BULL_PULLBACK: full size — best risk/reward entry in bull cycle
       const sizeFactor = regime2 === 'BULL_WEAKENING' ? 0.5 : 1.0;
 
-      // Bull mode — entry: only on bull watchlist coins, 1 position at a time
+      // Bull mode — BREAKOUT entry: only on bull watchlist coins, 1 position at a time
+      // Scalp positions don't count toward the breakout position limit
       const entrySet = new Set(entryWatchlist);
-      const openCount = Object.keys(this.state.positions).length;
-      if (openCount < this.config.maxPositions) {
+      const breakoutCount = Object.values(this.state.positions).filter(p => !p.scalpMode && !p.bearMode).length;
+      if (breakoutCount < this.config.maxPositions) {
         for (const sig of signals) {
           if (!entrySet.has(sig.symbol)) continue;
           if (sig.signal !== 'buy') continue;
-          if (this.state.positions[sig.symbol]) continue;
+
+          // If a scalp is open on this coin, close it first for breakout upgrade
+          const existingPos = this.state.positions[sig.symbol];
+          if (existingPos && existingPos.scalpMode) {
+            this.addEvent('info', `Closing scalp on ${sig.symbol} — breakout entry triggered`);
+            await this.executeExit(sig.symbol, sig.price, 'SCALP CLOSED FOR BREAKOUT UPGRADE');
+          } else if (existingPos) {
+            continue; // Non-scalp position already open
+          }
 
           // Check cooldown
           const cd = this.state.cooldowns[sig.symbol];
@@ -484,7 +579,37 @@ class Experiment2Bot {
           }
 
           await this.executeEntry(sig, { sizeFactor, regimeLabel });
-          break; // Only one entry per scan
+          break; // Only one breakout entry per scan
+        }
+      }
+
+      // Bull mode — SCALP loop: pre-breakout scalps on watched coins
+      for (const sig of signals) {
+        if (!entrySet.has(sig.symbol)) continue;
+        if (sig.price <= 0) continue;
+        // No scalp if any position (breakout or scalp) already open on this coin
+        if (this.state.positions[sig.symbol]) continue;
+
+        // Balance + breakout guard
+        const guard = this.canOpenScalp(sig.symbol);
+        if (!guard.allowed) {
+          this.addEvent('info', `[EXP2] ${guard.reason}`);
+          continue;
+        }
+
+        // Compute 1-min SMA and RSI
+        const sym = sig.symbol.includes('/') ? sig.symbol : sig.symbol.replace(/USD$/, '/USD');
+        const minBars = allMinBars.get(sym) || [];
+        if (minBars.length < scalp.DEFAULTS.smaPeriod) continue;
+
+        const closes = minBars.map(b => b.c);
+        const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, sig.price);
+        // Liquidity-tiered RSI threshold: LINK/AVAX < 45, others < 40
+        const rsiThreshold = HIGH_PRIORITY_SCALP.has(sig.symbol) ? 45 : 40;
+        const { shouldEnter, smaDip } = scalp.evalEntry(sig.price, sma20, rsi14, { rsiThreshold });
+
+        if (shouldEnter) {
+          await this.executeScalpEntry(sig, sma20, rsi14, smaDip, regimeLabel);
         }
       }
     }
@@ -577,6 +702,95 @@ class Experiment2Bot {
       this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
     } catch (err) {
       this.addEvent('danger', `Order failed for ${symbol}: ${err.message}`);
+    }
+  }
+
+  // ─── SCALP ENTRY (BULL MODE) ────────────────────────────────
+
+  async executeScalpEntry(signal, sma20, rsi, smaDip, regimeLabel) {
+    const { symbol, price } = signal;
+    const notional = Math.min(this.config.scalpTradeSize, this.state.cashBalance);
+    if (notional < 1) return;
+
+    try {
+      const order = await alpaca.placeOrder(
+        this.config.apiKey, this.config.secretKey, this.config.mode,
+        { symbol, side: 'buy', notional }
+      );
+
+      const fill = await getFillPrice(
+        this.config.apiKey, this.config.secretKey, this.config.mode, order.id, price
+      );
+
+      if (fill.status === 'canceled' || fill.status === 'expired' || fill.status === 'dry-run') {
+        this.addEvent('warning',
+          `Scalp order ${fill.status} for ${symbol} | $${notional.toFixed(2)} @ ~$${price.toFixed(4)} — no position opened`
+        );
+        return;
+      }
+
+      const fillPrice = fill.price;
+      const entryCost = notional * SPREAD_COST_PCT;
+      const qty = (notional - entryCost) / fillPrice;
+      const tier = HIGH_PRIORITY_SCALP.has(symbol) ? 'high-liq' : 'low-liq';
+
+      this.state.positions[symbol] = {
+        symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
+        entryTime: new Date().toISOString(),
+        scalpMode: true,
+      };
+
+      const regimeTag = regimeLabel ? ` [${regimeLabel}]` : '';
+      this.addEvent('success',
+        `SCALP BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | SMA $${sma20.toFixed(4)} | RSI ${rsi.toFixed(1)} | dip ${smaDip}% | ${tier}${regimeTag}`
+      );
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+    } catch (err) {
+      this.addEvent('danger', `Scalp order failed for ${symbol}: ${err.message}`);
+    }
+  }
+
+  // ─── BTC SCALP ENTRY (BEAR MODE) ────────────────────────────
+
+  async executeBtcScalpEntry(btcPrice, sma20, rsi, smaDip, countdown) {
+    const symbol = 'BTC/USD';
+    const notional = Math.min(this.config.scalpTradeSize / 2, this.state.cashBalance); // half size for BTC
+    if (notional < 1) return;
+
+    try {
+      const order = await alpaca.placeOrder(
+        this.config.apiKey, this.config.secretKey, this.config.mode,
+        { symbol, side: 'buy', notional }
+      );
+
+      const fill = await getFillPrice(
+        this.config.apiKey, this.config.secretKey, this.config.mode, order.id, btcPrice
+      );
+
+      if (fill.status === 'canceled' || fill.status === 'expired' || fill.status === 'dry-run') {
+        this.addEvent('warning',
+          `BTC scalp order ${fill.status} | $${notional.toFixed(2)} @ ~$${btcPrice.toFixed(2)} — no position opened`
+        );
+        return;
+      }
+
+      const fillPrice = fill.price;
+      const entryCost = notional * SPREAD_COST_PCT;
+      const qty = (notional - entryCost) / fillPrice;
+
+      this.state.positions[symbol] = {
+        symbol, orderId: order.id, entryPrice: fillPrice, qty, notional, entryCost,
+        entryTime: new Date().toISOString(),
+        scalpMode: true,
+        btcScalp: true,
+      };
+
+      this.addEvent('success',
+        `BTC SCALP BUY @ $${fillPrice.toFixed(2)} | $${notional.toFixed(2)} | SMA $${sma20.toFixed(2)} | RSI ${rsi.toFixed(1)} | dip ${smaDip}% | ${countdown}`
+      );
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+    } catch (err) {
+      this.addEvent('danger', `BTC scalp order failed: ${err.message}`);
     }
   }
 
@@ -763,19 +977,38 @@ class Experiment2Bot {
       if (reason.includes('TAKE PROFIT')) perfExitReason = 'takeProfit';
       else if (reason.includes('TRAILING STOP') || reason.includes('HARD STOP')) perfExitReason = 'stopLoss';
       else if (reason.includes('TIME EXIT')) perfExitReason = 'timeExit';
+      const exitTime = new Date().toISOString();
       recordPerfTrade({
         bot: 'exp2',
         coin: symbol,
         entryPrice: pos.entryPrice,
         exitPrice,
         entryTime: pos.entryTime,
-        exitTime: new Date().toISOString(),
+        exitTime,
         pnlPct: parseFloat(pnlPct.toFixed(2)),
         pnlUsd: parseFloat(pnl.toFixed(2)),
         exitReason: perfExitReason,
         regime: pos.bearMode ? 'bear' : 'bull',
         type: pos.bearType || 'momentum_breakout',
       });
+
+      // Scalp trade log
+      if (pos.scalpMode) {
+        recordScalpTrade({
+          bot: 'exp2',
+          coin: symbol,
+          entryPrice: pos.entryPrice,
+          exitPrice,
+          entryTime: pos.entryTime,
+          exitTime,
+          pnlUsd: parseFloat(pnl.toFixed(2)),
+          pnlPct: parseFloat(pnlPct.toFixed(2)),
+          exitReason: perfExitReason,
+          smaAtEntry: pos.sma20 || 0,
+          rsiAtEntry: pos.rsi || 0,
+          notional: pos.notional,
+        });
+      }
 
       // Cooldown after stop-loss: skip 2 candles (2 x 4h = 8 hours)
       if (isStopLoss) {
@@ -805,6 +1038,47 @@ class Experiment2Bot {
     saveState(this.state);
   }
 
+  // ─── SCALP GUARD HELPERS ─────────────────────────────────────
+
+  /**
+   * Returns the available balance for scalp entries.
+   * = current cash balance minus notional of any open/pending positions.
+   */
+  getAvailableScalpBalance() {
+    const reservedNotional = Object.values(this.state.positions)
+      .reduce((sum, p) => sum + (p.notional || 0), 0);
+    return Math.max(0, this.state.cashBalance - reservedNotional);
+  }
+
+  /**
+   * Returns true if a breakout swing position is currently open.
+   * Breakout positions are non-bearMode, non-scalpMode positions.
+   */
+  isBreakoutPositionOpen() {
+    return Object.values(this.state.positions)
+      .some(p => !p.bearMode && !p.scalpMode);
+  }
+
+  /**
+   * Checks whether a scalp entry is allowed for a given symbol.
+   * Returns { allowed: true } or { allowed: false, reason: string }.
+   */
+  canOpenScalp(symbol) {
+    // Block if available balance is below minimum
+    const available = this.getAvailableScalpBalance();
+    if (available < this.config.minScalpBalance) {
+      return { allowed: false, reason: `scalp blocked: insufficient balance ($${available.toFixed(2)} < $${this.config.minScalpBalance})` };
+    }
+
+    // Block if a breakout position is open on this coin
+    const pos = this.state.positions[symbol];
+    if (pos && !pos.bearMode && !pos.scalpMode) {
+      return { allowed: false, reason: `scalp blocked: breakout position active on ${symbol}` };
+    }
+
+    return { allowed: true };
+  }
+
   getStatus() {
     const total = this.state.wins + this.state.losses;
     return {
@@ -821,6 +1095,8 @@ class Experiment2Bot {
         scanInterval: this.config.scanInterval,
         minBalance: this.config.minBalance,
         cooldownCandles: this.config.cooldownCandles,
+        scalpTradeSize: this.config.scalpTradeSize,
+        minScalpBalance: this.config.minScalpBalance,
         watchlist: this.config.watchlist,
         bearWatchlist: this.config.bearWatchlist || this.config.watchlist,
         activeWatchlist: this.state.activeWatchlist || this.config.watchlist,
