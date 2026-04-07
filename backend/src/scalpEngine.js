@@ -5,6 +5,20 @@
 const alpaca = require('./alpaca');
 const { calcRSI, calcSMA } = require('./strategy');
 
+// ─── Spread cost estimates ───────────────────────────────────
+// Per-side spread cost as a fraction of notional.
+// Round-trip cost = spreadPerSide * 2
+const SPREAD_PER_SIDE = {
+  default: 0.0015,         // 0.15% per side — altcoins (AVAX, LINK, DOT, etc.)
+  btc: 0.0008,             // 0.08% per side — BTC (tighter spreads)
+  eth: 0.0010,             // 0.10% per side — ETH
+  sol: 0.0012,             // 0.12% per side — SOL
+};
+
+// Minimum net expected profit after spread costs (as a fraction).
+// If expected reversion gain minus round-trip spread < this, skip the entry.
+const MIN_NET_PROFIT = 0.0015; // 0.15% — must clear this after fees to be worth it
+
 // ─── Default parameters (altcoin scalps) ─────────────────────
 const DEFAULTS = {
   smaPeriod: 20,
@@ -69,13 +83,29 @@ function computeIndicators(barCloses, livePrice, opts = {}) {
 }
 
 /**
+ * Get the estimated per-side spread cost for a symbol.
+ *
+ * @param {string} symbol - e.g. 'BTC/USD'
+ * @returns {number} spread as a fraction (e.g. 0.0015)
+ */
+function getSpreadForSymbol(symbol) {
+  const s = (symbol || '').toUpperCase();
+  if (s.includes('BTC')) return SPREAD_PER_SIDE.btc;
+  if (s.includes('ETH')) return SPREAD_PER_SIDE.eth;
+  if (s.includes('SOL')) return SPREAD_PER_SIDE.sol;
+  return SPREAD_PER_SIDE.default;
+}
+
+/**
  * Evaluate whether a scalp entry should trigger.
+ * Includes a profitability filter: the expected reversion to SMA must
+ * exceed the estimated round-trip spread cost by MIN_NET_PROFIT.
  *
  * @param {number} price - current live price
  * @param {number} sma - 20-period SMA
  * @param {number} rsi - 14-period RSI
- * @param {object} [opts] - { dipPct, rsiThreshold } overrides
- * @returns {{ shouldEnter: boolean, smaDip: string }}
+ * @param {object} [opts] - { dipPct, rsiThreshold, symbol } overrides
+ * @returns {{ shouldEnter: boolean, smaDip: string, spreadBlocked?: boolean, expectedNet?: string }}
  */
 function evalEntry(price, sma, rsi, opts = {}) {
   const dipPct = opts.dipPct || DEFAULTS.dipPct;
@@ -84,7 +114,28 @@ function evalEntry(price, sma, rsi, opts = {}) {
   const belowSma = price < smaDipThreshold;
   const rsiOk = rsi < rsiThreshold;
   const smaDip = ((price - sma) / sma * 100).toFixed(3);
-  return { shouldEnter: belowSma && rsiOk, smaDip };
+
+  // If basic conditions aren't met, exit early
+  if (!belowSma || !rsiOk) {
+    return { shouldEnter: false, smaDip };
+  }
+
+  // Spread-aware profitability check
+  // Expected gain: price reverts from current to SMA = (sma - price) / price
+  const expectedGain = (sma - price) / price;
+  const spreadCost = getSpreadForSymbol(opts.symbol) * 2; // round trip
+  const expectedNet = expectedGain - spreadCost;
+
+  if (expectedNet < MIN_NET_PROFIT) {
+    return {
+      shouldEnter: false,
+      smaDip,
+      spreadBlocked: true,
+      expectedNet: (expectedNet * 100).toFixed(3),
+    };
+  }
+
+  return { shouldEnter: true, smaDip, expectedNet: (expectedNet * 100).toFixed(3) };
 }
 
 /**
@@ -138,11 +189,14 @@ function evalExit(pos, price, sma, opts = {}) {
 module.exports = {
   DEFAULTS,
   BTC_OVERRIDES,
+  SPREAD_PER_SIDE,
+  MIN_NET_PROFIT,
   fetchCandles,
   fetchCandlesMulti,
   computeIndicators,
   evalEntry,
   evalExit,
+  getSpreadForSymbol,
   // Re-export for convenience so bots don't need to import strategy.js separately
   calcSMA,
   calcRSI,

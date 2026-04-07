@@ -5,7 +5,7 @@ const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluate } = require('./breakout-strategy');
 const scalp = require('./scalpEngine');
-const { recordScalpTrade } = require('./scalpLog');
+const { recordScalpTrade, recordFeatureSnapshot, isCoinDisabled } = require('./scalpLog');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { evaluateBearEntry2, addTranche, checkTrancheExit, clearTranches, getBtcAccumulationStatus } = require('./bearStrategy2');
@@ -170,7 +170,7 @@ class Experiment2Bot {
       this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)} | Trail: ${(this.config.trailingStopPct * 100)}% | Hard SL: ${(this.config.hardStopPct * 100)}%`);
 
       this.runScan();
-      this.scanTimer = setInterval(() => this.runScan(), this.config.scanInterval * 1000);
+      this.scheduleNextScan();
 
       return { ok: true, msg: 'Experiment 2 started' };
     } catch (err) {
@@ -180,10 +180,20 @@ class Experiment2Bot {
 
   stop() {
     this.running = false;
-    if (this.scanTimer) { clearInterval(this.scanTimer); this.scanTimer = null; }
+    if (this.scanTimer) { clearTimeout(this.scanTimer); this.scanTimer = null; }
     if (this.streamHandle) { cryptoStream.disconnect(this.streamHandle); this.streamHandle = null; }
     this.addEvent('warning', 'Experiment 2 stopped');
     return { ok: true, msg: 'Experiment 2 stopped' };
+  }
+
+  scheduleNextScan() {
+    if (!this.running) return;
+    if (this.scanTimer) clearTimeout(this.scanTimer);
+    const hasPositions = Object.keys(this.state.positions).length > 0;
+    const interval = hasPositions ? 15000 : 60000;
+    this.scanTimer = setTimeout(() => {
+      this.runScan().then(() => this.scheduleNextScan());
+    }, interval);
   }
 
   // ─── POSITION SYNC ──────────────────────────────────────────
@@ -495,9 +505,7 @@ class Experiment2Bot {
                 const countdown = `next tranche in ${nextTrancheH}h ${nextTrancheM}m`;
 
                 if (trancheCount >= 1 && timeUntilNextMs > BTC_SCALP_MIN_GAP_MS) {
-                  // No scalp if already have a BTC scalp or other position open on BTC
-                  if (!this.state.positions['BTC/USD']) {
-                    // Balance guard
+                  if (!this.state.positions['BTC/USD'] && !isCoinDisabled('BTC/USD')) {
                     const guard = this.canOpenScalp('BTC/USD');
                     if (guard.allowed) {
                       const btcSym = 'BTC/USD';
@@ -505,13 +513,24 @@ class Experiment2Bot {
                       if (minBars.length >= scalp.DEFAULTS.smaPeriod) {
                         const closes = minBars.map(b => b.c);
                         const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, btcPrice);
-                        const { shouldEnter } = scalp.evalEntry(btcPrice, sma20, rsi14, {
+                        const { shouldEnter, spreadBlocked, expectedNet } = scalp.evalEntry(btcPrice, sma20, rsi14, {
                           dipPct: scalp.BTC_OVERRIDES.dipPct,
                           rsiThreshold: scalp.BTC_OVERRIDES.rsiThreshold,
+                          symbol: 'BTC/USD',
                         });
 
-                        if (shouldEnter) {
+                        if (spreadBlocked) {
+                          console.log(`[EXP2][SCALP] Skipping BTC — spread filter: expected net ${expectedNet}% | ${countdown}`);
+                        } else if (shouldEnter) {
                           const smaDip = ((btcPrice - sma20) / sma20 * 100).toFixed(3);
+                          recordFeatureSnapshot({
+                            bot: 'exp2', coin: 'BTC/USD', price: btcPrice,
+                            sma20, rsi14, smaDipPct: parseFloat(smaDip), expectedNetPct: parseFloat(expectedNet || '0'),
+                            regime: this._currentDetailedRegime?.state, regimeState: detailedState,
+                            fearGreed: this._currentDetailedRegime?.signals?.fng,
+                            btcPrice, btcGateOpen: false,
+                            volumeRatio: null,
+                          });
                           this.addEvent('info', `[EXP2][BEAR] BTC scalp opportunity | SMA $${sma20.toFixed(2)} RSI ${rsi14.toFixed(1)} dip ${smaDip}% | ${countdown}`);
                           await this.executeBtcScalpEntry(btcPrice, sma20, rsi14, smaDip, countdown);
                         }
@@ -587,28 +606,38 @@ class Experiment2Bot {
       for (const sig of signals) {
         if (!entrySet.has(sig.symbol)) continue;
         if (sig.price <= 0) continue;
-        // No scalp if any position (breakout or scalp) already open on this coin
         if (this.state.positions[sig.symbol]) continue;
+        if (isCoinDisabled(sig.symbol)) {
+          console.log(`[EXP2][SCALP] Skipping ${sig.symbol} — coin disabled (low win rate)`);
+          continue;
+        }
 
-        // Balance + breakout guard
         const guard = this.canOpenScalp(sig.symbol);
         if (!guard.allowed) {
           this.addEvent('info', `[EXP2] ${guard.reason}`);
           continue;
         }
 
-        // Compute 1-min SMA and RSI
         const sym = sig.symbol.includes('/') ? sig.symbol : sig.symbol.replace(/USD$/, '/USD');
         const minBars = allMinBars.get(sym) || [];
         if (minBars.length < scalp.DEFAULTS.smaPeriod) continue;
 
         const closes = minBars.map(b => b.c);
         const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, sig.price);
-        // Liquidity-tiered RSI threshold: LINK/AVAX < 45, others < 40
         const rsiThreshold = HIGH_PRIORITY_SCALP.has(sig.symbol) ? 45 : 40;
-        const { shouldEnter, smaDip } = scalp.evalEntry(sig.price, sma20, rsi14, { rsiThreshold });
+        const { shouldEnter, smaDip, spreadBlocked, expectedNet } = scalp.evalEntry(sig.price, sma20, rsi14, { rsiThreshold, symbol: sig.symbol });
 
-        if (shouldEnter) {
+        if (spreadBlocked) {
+          console.log(`[EXP2][SCALP] Skipping ${sig.symbol} — spread filter: expected net ${expectedNet}%`);
+        } else if (shouldEnter) {
+          recordFeatureSnapshot({
+            bot: 'exp2', coin: sig.symbol, price: sig.price,
+            sma20, rsi14, smaDipPct: parseFloat(smaDip), expectedNetPct: parseFloat(expectedNet || '0'),
+            regime: this._currentDetailedRegime?.state, regimeState: regimeLabel,
+            fearGreed: this._currentDetailedRegime?.signals?.fng,
+            btcPrice: gate.btcPrice, btcGateOpen: gate.open,
+            volumeRatio: sig.volumeRatio,
+          });
           await this.executeScalpEntry(sig, sma20, rsi14, smaDip, regimeLabel);
         }
       }

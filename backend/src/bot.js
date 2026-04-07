@@ -4,7 +4,7 @@ const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
 const scalp = require('./scalpEngine');
-const { recordScalpTrade } = require('./scalpLog');
+const { recordScalpTrade, recordFeatureSnapshot, isCoinDisabled } = require('./scalpLog');
 const BenchmarkTracker = require('./benchmark');
 const benchmark = new BenchmarkTracker();
 const cryptoStream = require('./crypto-stream');
@@ -209,9 +209,9 @@ class TradingBot {
       // Sync existing positions from Alpaca
       await this.syncPositions();
 
-      // Start scan loop
+      // Start scan loop with adaptive interval
       this.runScan();
-      this.scanTimer = setInterval(() => this.runScan(), this.config.scanInterval * 1000);
+      this.scheduleNextScan();
 
       return { ok: true, msg: 'Bot started' };
     } catch (err) {
@@ -221,10 +221,21 @@ class TradingBot {
 
   stop() {
     this.running = false;
-    if (this.scanTimer) { clearInterval(this.scanTimer); this.scanTimer = null; }
+    if (this.scanTimer) { clearTimeout(this.scanTimer); this.scanTimer = null; }
     if (this.streamHandle) { cryptoStream.disconnect(this.streamHandle); this.streamHandle = null; }
     this.addEvent('warning', 'Bot stopped by user');
     return { ok: true, msg: 'Bot stopped' };
+  }
+
+  // Adaptive scan interval: 15s when positions are open, 60s when idle
+  scheduleNextScan() {
+    if (!this.running) return;
+    if (this.scanTimer) clearTimeout(this.scanTimer);
+    const hasPositions = Object.keys(this.state.positions).length > 0;
+    const interval = hasPositions ? 15000 : 60000;
+    this.scanTimer = setTimeout(() => {
+      this.runScan().then(() => this.scheduleNextScan());
+    }, interval);
   }
 
   setCredentials(apiKey, secretKey, mode) {
@@ -641,8 +652,11 @@ class TradingBot {
       for (const candidate of signals) {
         if (!bullEntrySet.has(candidate.symbol)) continue;
         if (candidate.price <= 0 || candidate.stale) continue;
-        // No scalp if any position (swing or scalp) is already open on this coin
         if (this.state.positions[candidate.symbol]) continue;
+        if (isCoinDisabled(candidate.symbol)) {
+          console.log(`[MAIN][SCALP] Skipping ${candidate.symbol} — coin disabled (low win rate)`);
+          continue;
+        }
 
         const sym = candidate.symbol.includes('/') ? candidate.symbol : candidate.symbol.replace(/USD$/, '/USD');
         const minBars = allBars.get(sym) || [];
@@ -650,9 +664,19 @@ class TradingBot {
 
         const closes = minBars.map(b => b.c);
         const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, candidate.price);
-        const { shouldEnter, smaDip } = scalp.evalEntry(candidate.price, sma20, rsi14);
+        const { shouldEnter, smaDip, spreadBlocked, expectedNet } = scalp.evalEntry(candidate.price, sma20, rsi14, { symbol: candidate.symbol });
 
-        if (shouldEnter) {
+        if (spreadBlocked) {
+          console.log(`[MAIN][SCALP] Skipping ${candidate.symbol} — spread filter: expected net ${expectedNet}%`);
+        } else if (shouldEnter) {
+          recordFeatureSnapshot({
+            bot: 'main', coin: candidate.symbol, price: candidate.price,
+            sma20, rsi14, smaDipPct: parseFloat(smaDip), expectedNetPct: parseFloat(expectedNet || '0'),
+            regime: this._currentDetailedRegime?.state, regimeState: regimeLabel,
+            fearGreed: this._currentDetailedRegime?.signals?.fng,
+            btcPrice: gate.btcPrice, btcGateOpen: gate.open,
+            volumeRatio: candidate.volumeRatio,
+          });
           await this.executeScalpEntry(candidate, sma20, rsi14, smaDip, regimeLabel);
         }
       }

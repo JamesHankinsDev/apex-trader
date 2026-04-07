@@ -24,6 +24,8 @@ import OnboardingHint from "./components/OnboardingHint";
 import Drawer from "./components/Drawer";
 import OverlayChart from "./components/OverlayChart";
 import ScalpBreakdown from "./components/ScalpBreakdown";
+import Holdings from "./components/Holdings";
+import useTradeNotifications from "./components/useTradeNotifications";
 
 // ─── MAIN PAGE ───────────────────────────────────────────────
 export default function Dashboard() {
@@ -46,6 +48,14 @@ export default function Dashboard() {
   const [exp2ChartPeriod, setExp2ChartPeriod] = useState("1D");
   const [mobileSection, setMobileSection] = useState("dashboard");
   const [scalpLog, setScalpLog] = useState(null);
+
+  // ── Trade notifications ───────────────────────────────────
+  const notifStatuses = useMemo(() => [
+    { key: "main", status },
+    { key: "exp1", status: expStatus },
+    { key: "exp2", status: exp2Status },
+  ], [status, expStatus, exp2Status]);
+  useTradeNotifications(notifStatuses);
 
   // ── Clock ─────────────────────────────────────────────────
   useEffect(() => {
@@ -142,7 +152,11 @@ export default function Dashboard() {
   return (
     <div style={{ position: "relative", zIndex: 1, paddingBottom: 90 }}>
       <Header running={running} mode={mode} setMode={setMode} clock={clock} onShowGuide={() => setShowGuide(true)} onShowDrawer={() => setShowDrawer(true)} />
-      <Leaderboard leaderboard={leaderboard} />
+      <Leaderboard leaderboard={leaderboard} statuses={[
+        { key: "main", status },
+        { key: "exp1", status: expStatus },
+        { key: "exp2", status: exp2Status },
+      ]} />
 
       {/* Cross-bot comparison: overlay chart + scalp breakdown */}
       {(status?.equityHistory?.length > 1 || expStatus?.equityHistory?.length > 1 || exp2Status?.equityHistory?.length > 1) && (
@@ -156,6 +170,11 @@ export default function Dashboard() {
         />
       )}
       <ScalpBreakdown scalpLog={scalpLog} leaderboard={leaderboard} />
+      <Holdings statuses={[
+        { key: "main", status },
+        { key: "exp1", status: expStatus },
+        { key: "exp2", status: exp2Status },
+      ]} />
 
       <TabBar activeTab={activeTab} setActiveTab={setActiveTab} regime={regime} />
       <RegimeBar gate={gate} regime={regime} activeTab={activeTab} />

@@ -1,4 +1,5 @@
 import styles from "../page.module.css";
+import NotificationToggle from "./NotificationToggle";
 
 export default function Header({ running, mode, setMode, clock, onShowGuide, onShowDrawer }) {
   return (
@@ -37,6 +38,7 @@ export default function Header({ running, mode, setMode, clock, onShowGuide, onS
         <button className={styles.guideBtn} onClick={onShowDrawer}>
           {"\u2699"} SETTINGS
         </button>
+        <NotificationToggle />
         <div className={styles.pill} style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
           {clock}
         </div>

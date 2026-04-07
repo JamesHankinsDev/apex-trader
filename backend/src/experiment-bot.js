@@ -10,7 +10,7 @@ const { evaluateBearEntry1 } = require('./bearStrategy1');
 const { setBearCooldown } = require('./bearStrategy');
 const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
 const scalp = require('./scalpEngine');
-const { recordScalpTrade } = require('./scalpLog');
+const { recordScalpTrade, recordFeatureSnapshot, isCoinDisabled } = require('./scalpLog');
 const BenchmarkTracker = require('./benchmark');
 const benchmark = new BenchmarkTracker();
 
@@ -152,7 +152,7 @@ class ExperimentBot {
       this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)} | Scalp size: $${this.config.scalpTradeSize}`);
 
       this.runScan();
-      this.scanTimer = setInterval(() => this.runScan(), this.config.scanInterval * 1000);
+      this.scheduleNextScan();
 
       return { ok: true, msg: 'Experiment started' };
     } catch (err) {
@@ -162,10 +162,20 @@ class ExperimentBot {
 
   stop() {
     this.running = false;
-    if (this.scanTimer) { clearInterval(this.scanTimer); this.scanTimer = null; }
+    if (this.scanTimer) { clearTimeout(this.scanTimer); this.scanTimer = null; }
     if (this.streamHandle) { cryptoStream.disconnect(this.streamHandle); this.streamHandle = null; }
     this.addEvent('warning', 'Experiment stopped');
     return { ok: true, msg: 'Experiment stopped' };
+  }
+
+  scheduleNextScan() {
+    if (!this.running) return;
+    if (this.scanTimer) clearTimeout(this.scanTimer);
+    const hasPositions = Object.keys(this.state.positions).length > 0;
+    const interval = hasPositions ? 15000 : 60000;
+    this.scanTimer = setTimeout(() => {
+      this.runScan().then(() => this.scheduleNextScan());
+    }, interval);
   }
 
   // ─── POSITION SYNC ──────────────────────────────────────────
@@ -324,7 +334,8 @@ class ExperimentBot {
         // ── Compute scalp indicators from 1-min bars ──
         const closes = minuteBars.map(b => b.c);
         const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, livePrice);
-        const { shouldEnter: belowSmaAndRsi } = scalp.evalEntry(livePrice, sma20, rsi14);
+        const { shouldEnter: belowSmaAndRsi, spreadBlocked } = scalp.evalEntry(livePrice, sma20, rsi14, { symbol });
+        if (spreadBlocked) console.log(`[EXP1][SCALP] Skipping ${symbol} — spread filter`);
         const belowSma = livePrice < sma20 * (1 - scalp.DEFAULTS.dipPct);
 
         // Volume of the most recent 1-min bar (used for fade detection)
@@ -516,9 +527,20 @@ class ExperimentBot {
           if (openCount >= this.config.maxPositions) break;
           if (!entrySet.has(sig.symbol)) continue;
           if (sig.signal !== 'buy') continue;
-          // Don't open a scalp if any position (scalp or swing) is already open on this coin
           if (this.state.positions[sig.symbol]) continue;
+          if (isCoinDisabled(sig.symbol)) {
+            console.log(`[EXP1][SCALP] Skipping ${sig.symbol} — coin disabled (low win rate)`);
+            continue;
+          }
 
+          recordFeatureSnapshot({
+            bot: 'exp1', coin: sig.symbol, price: sig.price,
+            sma20: sig.sma20, rsi14: sig.rsi, smaDipPct: sig.smaDip, expectedNetPct: 0,
+            regime: this._currentDetailedRegime?.state, regimeState: regimeLabel,
+            fearGreed: this._currentDetailedRegime?.signals?.fng,
+            btcPrice: gate.btcPrice, btcGateOpen: gate.open,
+            volumeRatio: sig.volumeRatio,
+          });
           await this.executeScalpEntry(sig, { regimeLabel });
           openCount++;
         }
