@@ -344,7 +344,7 @@ class ExperimentBot {
         };
 
         if (belowSma) signal.reasons.push(`Price ${signal.smaDip}% below SMA20`);
-        if (rsi14 < SCALP_RSI_THRESHOLD) signal.reasons.push(`RSI ${rsi14.toFixed(1)} < ${SCALP_RSI_THRESHOLD}`);
+        if (rsi14 < scalp.DEFAULTS.rsiThreshold) signal.reasons.push(`RSI ${rsi14.toFixed(1)} < ${scalp.DEFAULTS.rsiThreshold}`);
 
         // Enrich with hourly bar data for bear strategy
         if (hourlyBars && hourlyBars.length > 0) {
