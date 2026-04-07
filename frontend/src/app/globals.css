@@ -25,6 +25,10 @@ body {
   font-size: 14px;
   line-height: 1.5;
   overflow-x: hidden;
+  /* PWA safe areas for notched phones */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 /* Scanlines — subtle */

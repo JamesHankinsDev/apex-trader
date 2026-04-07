@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="64" fill="#050508"/>
+  <rect x="16" y="16" width="480" height="480" rx="52" fill="none" stroke="#1a1a2e" stroke-width="2"/>
+  <text x="256" y="240" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="180" fill="#ccd6f6" letter-spacing="8">AT</text>
+  <text x="256" y="340" text-anchor="middle" font-family="monospace" font-size="48" fill="#667799" letter-spacing="6">TRADER</text>
+  <line x1="80" y1="380" x2="432" y2="380" stroke="#00ff88" stroke-width="3" opacity="0.6"/>
+  <polyline points="80,420 160,400 240,430 320,390 400,410 432,395" fill="none" stroke="#00ff88" stroke-width="2.5" opacity="0.4"/>
+</svg>
