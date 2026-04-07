@@ -26,6 +26,53 @@ function cacheSet(key, data) {
   }
 }
 
+// ── RATE LIMITER (token bucket) ──────────────────────────────
+// Alpaca allows ~200 requests/minute. With 3 bots scanning, we budget
+// conservatively: 150 tokens/min = 2.5/sec, burst up to 10.
+const rateLimiter = {
+  tokens: 10,
+  maxTokens: 10,
+  refillRate: 2.5,          // tokens per second
+  lastRefill: Date.now(),
+  queue: [],
+
+  refill() {
+    const now = Date.now();
+    const elapsed = (now - this.lastRefill) / 1000;
+    this.tokens = Math.min(this.maxTokens, this.tokens + elapsed * this.refillRate);
+    this.lastRefill = now;
+  },
+
+  async acquire() {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return;
+    }
+    // Wait until a token is available
+    const waitMs = ((1 - this.tokens) / this.refillRate) * 1000;
+    await new Promise(r => setTimeout(r, Math.ceil(waitMs)));
+    this.refill();
+    this.tokens -= 1;
+  },
+};
+
+// Wrap axios to apply rate limiting on all Alpaca API calls
+async function rateLimitedGet(url, config) {
+  await rateLimiter.acquire();
+  return axios.get(url, config);
+}
+
+async function rateLimitedPost(url, data, config) {
+  await rateLimiter.acquire();
+  return axios.post(url, data, config);
+}
+
+async function rateLimitedDelete(url, config) {
+  await rateLimiter.acquire();
+  return axios.delete(url, config);
+}
+
 // Track in-flight requests to prevent duplicate concurrent fetches
 const inFlight = new Map();
 
@@ -46,14 +93,14 @@ function getHeaders(apiKey, secretKey) {
 // ── ACCOUNT / ORDERS ────────────────────────────────────────
 
 async function getAccount(apiKey, secretKey, mode) {
-  const res = await axios.get(`${getBaseUrl(mode)}/v2/account`, {
+  const res = await rateLimitedGet(`${getBaseUrl(mode)}/v2/account`, {
     headers: getHeaders(apiKey, secretKey),
   });
   return res.data;
 }
 
 async function getPositions(apiKey, secretKey, mode) {
-  const res = await axios.get(`${getBaseUrl(mode)}/v2/positions`, {
+  const res = await rateLimitedGet(`${getBaseUrl(mode)}/v2/positions`, {
     headers: getHeaders(apiKey, secretKey),
   });
   return res.data;
@@ -80,14 +127,14 @@ async function placeOrder(
   } else if (qty) {
     body.qty = qty.toString();
   }
-  const res = await axios.post(`${getBaseUrl(mode)}/v2/orders`, body, {
+  const res = await rateLimitedPost(`${getBaseUrl(mode)}/v2/orders`, body, {
     headers: getHeaders(apiKey, secretKey),
   });
   return res.data;
 }
 
 async function getOrder(apiKey, secretKey, mode, orderId) {
-  const res = await axios.get(`${getBaseUrl(mode)}/v2/orders/${orderId}`, {
+  const res = await rateLimitedGet(`${getBaseUrl(mode)}/v2/orders/${orderId}`, {
     headers: getHeaders(apiKey, secretKey),
     timeout: 5000,
   });
@@ -96,14 +143,14 @@ async function getOrder(apiKey, secretKey, mode, orderId) {
 
 async function closePosition(apiKey, secretKey, mode, symbol) {
   const sym = symbol.replace("/", "");
-  const res = await axios.delete(`${getBaseUrl(mode)}/v2/positions/${sym}`, {
+  const res = await rateLimitedDelete(`${getBaseUrl(mode)}/v2/positions/${sym}`, {
     headers: getHeaders(apiKey, secretKey),
   });
   return res.data;
 }
 
 async function getPortfolioHistory(apiKey, secretKey, mode, params = {}) {
-  const res = await axios.get(`${getBaseUrl(mode)}/v2/account/portfolio/history`, {
+  const res = await rateLimitedGet(`${getBaseUrl(mode)}/v2/account/portfolio/history`, {
     headers: getHeaders(apiKey, secretKey),
     params: { period: '1A', timeframe: '1D', ...params },
     timeout: 8000,
@@ -113,7 +160,7 @@ async function getPortfolioHistory(apiKey, secretKey, mode, params = {}) {
 
 // Get recent fill activities (to find actual entry timestamps)
 async function getActivities(apiKey, secretKey, mode, activityType = 'FILL', limit = 100) {
-  const res = await axios.get(`${getBaseUrl(mode)}/v2/account/activities/${activityType}`, {
+  const res = await rateLimitedGet(`${getBaseUrl(mode)}/v2/account/activities/${activityType}`, {
     headers: getHeaders(apiKey, secretKey),
     params: { direction: 'desc', page_size: limit },
     timeout: 8000,
@@ -148,7 +195,7 @@ async function getCryptoBars(
   const promise = (async () => {
     try {
       const start = new Date(Date.now() - lookbackMs).toISOString();
-      const res = await axios.get(
+      const res = await rateLimitedGet(
         `https://data.alpaca.markets/v1beta3/crypto/us/bars`,
         {
           params: { symbols: sym, timeframe, limit, start },
@@ -218,7 +265,7 @@ async function getCryptoBarsMulti(
       const params = { symbols: symbolsParam, timeframe, limit: totalLimit, start };
       if (pageToken) params.page_token = pageToken;
 
-      const res = await axios.get(
+      const res = await rateLimitedGet(
         `https://data.alpaca.markets/v1beta3/crypto/us/bars`,
         { params, headers, timeout: 10000 },
       );
@@ -275,7 +322,7 @@ async function getLatestCryptoPrice(apiKey, secretKey, symbol, streamHandle) {
 
   const promise = (async () => {
     try {
-      const res = await axios.get(
+      const res = await rateLimitedGet(
         `https://data.alpaca.markets/v1beta3/crypto/us/latest/trades`,
         {
           params: { symbols: sym },
@@ -332,7 +379,7 @@ async function getLatestCryptoPricesMulti(apiKey, secretKey, symbols, streamHand
 
   if (needRest.length > 0) {
     try {
-      const res = await axios.get(
+      const res = await rateLimitedGet(
         `https://data.alpaca.markets/v1beta3/crypto/us/latest/trades`,
         {
           params: { symbols: needRest.join(',') },

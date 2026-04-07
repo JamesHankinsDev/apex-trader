@@ -22,7 +22,16 @@ app.use(cors({
 
 // ─── HEALTH CHECK ──────────────────────────────────────────────
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', ts: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    ts: new Date().toISOString(),
+    uptime: Math.round(process.uptime()),
+    bots: {
+      main: { running: bot.running || false, lastScan: bot.state?.lastScan || null, positions: Object.keys(bot.state?.positions || {}).length },
+      exp1: { running: experimentBot.running || false, lastScan: experimentBot.state?.lastScan || null, positions: Object.keys(experimentBot.state?.positions || {}).length },
+      exp2: { running: experiment2Bot.running || false, lastScan: experiment2Bot.state?.lastScan || null, positions: Object.keys(experiment2Bot.state?.positions || {}).length },
+    },
+  });
 });
 
 // ─── SHARED MARKET DATA (computed once, shared across all status endpoints) ──

@@ -25,6 +25,8 @@ import Drawer from "./components/Drawer";
 import OverlayChart from "./components/OverlayChart";
 import ScalpBreakdown from "./components/ScalpBreakdown";
 import Holdings from "./components/Holdings";
+import PnlDistribution from "./components/PnlDistribution";
+import TradeHeatmap from "./components/TradeHeatmap";
 import useTradeNotifications from "./components/useTradeNotifications";
 
 // ─── MAIN PAGE ───────────────────────────────────────────────
@@ -175,6 +177,8 @@ export default function Dashboard() {
         { key: "exp1", status: expStatus },
         { key: "exp2", status: exp2Status },
       ]} />
+      <PnlDistribution scalpLog={scalpLog} />
+      <TradeHeatmap scalpLog={scalpLog} />
 
       <TabBar activeTab={activeTab} setActiveTab={setActiveTab} regime={regime} />
       <RegimeBar gate={gate} regime={regime} activeTab={activeTab} />
