@@ -7,7 +7,11 @@ export default function NotificationToggle() {
   const [permission, setPermission] = useState("default");
 
   useEffect(() => {
-    setPermission(getNotificationPermission());
+    try {
+      setPermission(getNotificationPermission());
+    } catch {
+      setPermission("unsupported");
+    }
   }, []);
 
   const handleClick = async () => {

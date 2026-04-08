@@ -46,6 +46,160 @@ function useQuietMode(botStatus) {
   }, [botStatus]);
 }
 
+// ─── BotTabContent — 2-column layout: signals | chart+trades ─
+function BotTabContent({ botType, botStatus, config, running, connecting, onStart, onStop, chartPeriod, setChartPeriod, onSell, mobileSection }) {
+  const bs = botStatus;
+  const pv = bs?.portfolioValue || 0;
+  const sv = bs?.startValue || pv;
+  const regime = bs?.regime;
+  const quiet = useQuietMode(bs);
+
+  const signalTitle = botType === "main"
+    ? (regime?.current === "bear" ? "LIVE SIGNALS (Range Trading)" : "LIVE SIGNALS (Momentum)")
+    : botType === "exp1"
+      ? (regime?.current === "bear" ? "SIGNALS (Range Trading)" : "HYBRID SIGNALS (Mean Reversion + Momentum)")
+      : (regime?.current === "bear" ? "SIGNALS (BTC Accumulation)" : "BREAKOUT SIGNALS (20-Bar Momentum)");
+
+  const chartLabel = botType === "main" ? "EXP 1 EQUITY" : botType === "exp1" ? "EXP 2 EQUITY" : "EXP 3 EQUITY";
+
+  const pCfg = PERIODS[chartPeriod] || PERIODS["1D"];
+  const bm = bs?.benchmarks;
+  const eqH = pCfg.useDaily
+    ? (pCfg.ms === Infinity ? bm?.equalWeight?.dailyHistory : filterByPeriod(bm?.equalWeight?.dailyHistory, pCfg.ms))
+    : filterByPeriod(bm?.equalWeight?.history, pCfg.ms);
+  const mcH = pCfg.useDaily
+    ? (pCfg.ms === Infinity ? bm?.mcapWeight?.dailyHistory : filterByPeriod(bm?.mcapWeight?.dailyHistory, pCfg.ms))
+    : filterByPeriod(bm?.mcapWeight?.history, pCfg.ms);
+  const btH = pCfg.useDaily
+    ? (pCfg.ms === Infinity ? bm?.btcOnly?.dailyHistory : filterByPeriod(bm?.btcOnly?.dailyHistory, pCfg.ms))
+    : filterByPeriod(bm?.btcOnly?.history, pCfg.ms);
+  const filteredEquity = filterByPeriod(bs?.equityHistory, pCfg.ms);
+
+  const bearSignal = regime?.current === "bear" && bs?.lastBearSignal;
+
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+  const showDashboard = !isMobile || mobileSection === "dashboard";
+  const showSignals = !isMobile || mobileSection === "signals";
+  const showTrades = !isMobile || mobileSection === "trades";
+  const showSettings = !isMobile || mobileSection === "settings";
+
+  return (
+    <div className={`${quiet ? styles.quietMode : styles.activeMode}`}>
+      {showDashboard && (
+        <StatsBar
+          portfolioValue={pv} startValue={sv} todayStartValue={bs?.todayStartValue}
+          totalTrades={bs?.totalTrades} winRate={bs?.winRate}
+          positions={bs?.positions} lastScan={bs?.lastScan}
+        />
+      )}
+
+      {showDashboard && (
+        <MobileKPIs portfolioValue={pv} startValue={sv} todayStartValue={bs?.todayStartValue} running={running} />
+      )}
+
+      <div className={styles.grid}>
+        {showSignals && (
+          <div className={styles.panel}>
+            <OnboardingHint hintKey="signals" />
+            <SignalPanel signals={bs?.signals} regime={regime} botType={botType} botStatus={bs} title={signalTitle} />
+
+            <OnboardingHint hintKey="positions" />
+            <div className={styles.panelTitle} style={{ marginTop: 8 }}>{"\u25B2"} OPEN POSITIONS</div>
+            {Object.keys(bs?.positions || {}).length === 0 ? (
+              <div className={styles.empty}>No open positions</div>
+            ) : (
+              Object.values(bs.positions).map((pos) => (
+                <PositionCard
+                  key={pos.symbol}
+                  pos={pos}
+                  botType={botType}
+                  onSell={() => onSell(pos.symbol)}
+                />
+              ))
+            )}
+
+            {bearSignal && (
+              <div style={{ padding: "10px 14px", margin: "8px 0", background: "rgba(255,51,85,0.06)", border: "1px solid rgba(255,51,85,0.15)", borderRadius: 6, fontSize: 12, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
+                {botType === "exp2"
+                  ? `Last BTC Tranche: ${bs.lastBearSignal.coin?.replace("/USD", "")} | Entry: ${fmt$(bs.lastBearSignal.entryPrice)} | ${fmtTime(bs.lastBearSignal.time)}`
+                  : `Last Range Trade: ${bs.lastBearSignal.coin?.replace("/USD", "")} | Entry: ${fmt$(bs.lastBearSignal.entryPrice)} | TP: ${fmt$(bs.lastBearSignal.tpPrice)} | ${fmtTime(bs.lastBearSignal.time)}`
+                }
+              </div>
+            )}
+          </div>
+        )}
+
+        {(showDashboard || showTrades) && (
+          <div className={styles.center}>
+            {showDashboard && (
+              <>
+                <OnboardingHint hintKey="chart" />
+                <div className={styles.chartArea}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <div className={styles.chartLabel} style={{ marginBottom: 0 }}>{chartLabel} · BENCHMARKS (50-day return)</div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {Object.keys(PERIODS).map(p => (
+                        <button key={p} onClick={() => setChartPeriod(p)} style={{
+                          padding: "3px 10px", fontSize: 10, fontFamily: "var(--font-mono)",
+                          letterSpacing: 1, border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+                          background: chartPeriod === p ? "rgba(68,136,255,0.2)" : "transparent",
+                          color: chartPeriod === p ? "#4488ff" : "var(--dim)",
+                        }}>{p}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <EquityChart
+                    data={filteredEquity.length > 0 ? filteredEquity : [{ t: Date.now(), v: sv || 100 }]}
+                    startValue={sv}
+                    equalHistory={eqH}
+                    mcapHistory={mcH}
+                    btcHistory={btH}
+                    period={chartPeriod}
+                  />
+                </div>
+
+                <BenchmarkBar benchmarks={bm} portfolioValue={pv} startValue={sv} />
+
+                {botType === "main" && (
+                  <RiskMetrics riskMetrics={bs?.riskMetrics} wins={bs?.wins || 0} losses={bs?.losses || 0} />
+                )}
+              </>
+            )}
+
+            {showTrades && (
+              <>
+                <OnboardingHint hintKey="trades" />
+                <TradeLog trades={bs?.trades} />
+              </>
+            )}
+          </div>
+        )}
+
+        {showSettings && isMobile && (
+          <div className={styles.panel}>
+            <ConfigPanel
+              botType={botType}
+              botStatus={bs}
+              config={botType === "main" ? config : null}
+              running={running}
+              onStart={onStart}
+              onStop={onStop}
+              connecting={connecting}
+            />
+            <EventLog events={bs?.events} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN PAGE ───────────────────────────────────────────────
 export default function Dashboard() {
   // ── State ─────────────────────────────────────────────────
@@ -244,162 +398,3 @@ export default function Dashboard() {
   );
 }
 
-// ─── BotTabContent — 2-column layout: signals | chart+trades ─
-function BotTabContent({ botType, botStatus, config, running, connecting, onStart, onStop, chartPeriod, setChartPeriod, onSell, mobileSection }) {
-  const bs = botStatus;
-  const pv = bs?.portfolioValue || 0;
-  const sv = bs?.startValue || pv;
-  const regime = bs?.regime;
-  const quiet = useQuietMode(bs);
-
-  const signalTitle = botType === "main"
-    ? (regime?.current === "bear" ? "LIVE SIGNALS (Range Trading)" : "LIVE SIGNALS (Momentum)")
-    : botType === "exp1"
-      ? (regime?.current === "bear" ? "SIGNALS (Range Trading)" : "HYBRID SIGNALS (Mean Reversion + Momentum)")
-      : (regime?.current === "bear" ? "SIGNALS (BTC Accumulation)" : "BREAKOUT SIGNALS (20-Bar Momentum)");
-
-  const chartLabel = botType === "main" ? "EXP 1 EQUITY" : botType === "exp1" ? "EXP 2 EQUITY" : "EXP 3 EQUITY";
-
-  // Chart data — filter equity and benchmarks by selected period
-  const pCfg = PERIODS[chartPeriod] || PERIODS["1D"];
-  const bm = bs?.benchmarks;
-  const eqH = pCfg.useDaily
-    ? (pCfg.ms === Infinity ? bm?.equalWeight?.dailyHistory : filterByPeriod(bm?.equalWeight?.dailyHistory, pCfg.ms))
-    : filterByPeriod(bm?.equalWeight?.history, pCfg.ms);
-  const mcH = pCfg.useDaily
-    ? (pCfg.ms === Infinity ? bm?.mcapWeight?.dailyHistory : filterByPeriod(bm?.mcapWeight?.dailyHistory, pCfg.ms))
-    : filterByPeriod(bm?.mcapWeight?.history, pCfg.ms);
-  const btH = pCfg.useDaily
-    ? (pCfg.ms === Infinity ? bm?.btcOnly?.dailyHistory : filterByPeriod(bm?.btcOnly?.dailyHistory, pCfg.ms))
-    : filterByPeriod(bm?.btcOnly?.history, pCfg.ms);
-  const filteredEquity = filterByPeriod(bs?.equityHistory, pCfg.ms);
-
-  const bearSignal = regime?.current === "bear" && bs?.lastBearSignal;
-
-  // Mobile detection — must use state to avoid hydration mismatch
-  const [isMobile, setIsMobile] = useState(false);
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth <= 768);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
-  const showDashboard = !isMobile || mobileSection === "dashboard";
-  const showSignals = !isMobile || mobileSection === "signals";
-  const showTrades = !isMobile || mobileSection === "trades";
-  const showSettings = !isMobile || mobileSection === "settings";
-
-  return (
-    <div className={`${quiet ? styles.quietMode : styles.activeMode}`}>
-      {/* Stats — always visible on desktop, dashboard section on mobile */}
-      {showDashboard && (
-        <StatsBar
-          portfolioValue={pv} startValue={sv} todayStartValue={bs?.todayStartValue}
-          totalTrades={bs?.totalTrades} winRate={bs?.winRate}
-          positions={bs?.positions} lastScan={bs?.lastScan}
-        />
-      )}
-
-      {showDashboard && (
-        <MobileKPIs portfolioValue={pv} startValue={sv} todayStartValue={bs?.todayStartValue} running={running} />
-      )}
-
-      <div className={styles.grid}>
-        {/* LEFT: Signals + Positions — visible on desktop always, "signals" section on mobile */}
-        {showSignals && (
-          <div className={styles.panel}>
-            <OnboardingHint hintKey="signals" />
-            <SignalPanel signals={bs?.signals} regime={regime} botType={botType} botStatus={bs} title={signalTitle} />
-
-            <OnboardingHint hintKey="positions" />
-            <div className={styles.panelTitle} style={{ marginTop: 8 }}>{"\u25B2"} OPEN POSITIONS</div>
-            {Object.keys(bs?.positions || {}).length === 0 ? (
-              <div className={styles.empty}>No open positions</div>
-            ) : (
-              Object.values(bs.positions).map((pos) => (
-                <PositionCard
-                  key={pos.symbol}
-                  pos={pos}
-                  botType={botType}
-                  onSell={() => onSell(pos.symbol)}
-                />
-              ))
-            )}
-
-            {bearSignal && (
-              <div style={{ padding: "10px 14px", margin: "8px 0", background: "rgba(255,51,85,0.06)", border: "1px solid rgba(255,51,85,0.15)", borderRadius: 6, fontSize: 12, fontFamily: "var(--font-mono)", color: "#ff6680" }}>
-                {botType === "exp2"
-                  ? `Last BTC Tranche: ${bs.lastBearSignal.coin?.replace("/USD", "")} | Entry: ${fmt$(bs.lastBearSignal.entryPrice)} | ${fmtTime(bs.lastBearSignal.time)}`
-                  : `Last Range Trade: ${bs.lastBearSignal.coin?.replace("/USD", "")} | Entry: ${fmt$(bs.lastBearSignal.entryPrice)} | TP: ${fmt$(bs.lastBearSignal.tpPrice)} | ${fmtTime(bs.lastBearSignal.time)}`
-                }
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* CENTER: Chart + Benchmarks + Trades — visible on desktop, "dashboard" or "trades" on mobile */}
-        {(showDashboard || showTrades) && (
-          <div className={styles.center}>
-            {showDashboard && (
-              <>
-                <OnboardingHint hintKey="chart" />
-                <div className={styles.chartArea}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                    <div className={styles.chartLabel} style={{ marginBottom: 0 }}>{chartLabel} · BENCHMARKS (50-day return)</div>
-                    <div style={{ display: "flex", gap: 4 }}>
-                      {Object.keys(PERIODS).map(p => (
-                        <button key={p} onClick={() => setChartPeriod(p)} style={{
-                          padding: "3px 10px", fontSize: 10, fontFamily: "var(--font-mono)",
-                          letterSpacing: 1, border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
-                          background: chartPeriod === p ? "rgba(68,136,255,0.2)" : "transparent",
-                          color: chartPeriod === p ? "#4488ff" : "var(--dim)",
-                        }}>{p}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <EquityChart
-                    data={filteredEquity.length > 0 ? filteredEquity : [{ t: Date.now(), v: sv || 100 }]}
-                    startValue={sv}
-                    equalHistory={eqH}
-                    mcapHistory={mcH}
-                    btcHistory={btH}
-                    period={chartPeriod}
-                  />
-                </div>
-
-                <BenchmarkBar benchmarks={bm} portfolioValue={pv} startValue={sv} />
-
-                {botType === "main" && (
-                  <RiskMetrics riskMetrics={bs?.riskMetrics} wins={bs?.wins || 0} losses={bs?.losses || 0} />
-                )}
-              </>
-            )}
-
-            {showTrades && (
-              <>
-                <OnboardingHint hintKey="trades" />
-                <TradeLog trades={bs?.trades} />
-              </>
-            )}
-          </div>
-        )}
-
-        {/* RIGHT: Settings — only on mobile "settings" section (desktop uses drawer) */}
-        {showSettings && isMobile && (
-          <div className={styles.panel}>
-            <ConfigPanel
-              botType={botType}
-              botStatus={bs}
-              config={botType === "main" ? config : null}
-              running={running}
-              onStart={onStart}
-              onStop={onStop}
-              connecting={connecting}
-            />
-            <EventLog events={bs?.events} />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}

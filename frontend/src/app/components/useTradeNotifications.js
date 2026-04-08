@@ -14,7 +14,7 @@ export default function useTradeNotifications(statuses) {
   const initialized = useRef(false);
 
   const notify = useCallback((title, body, tag) => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || typeof Notification === "undefined") return;
     if (Notification.permission !== "granted") return;
 
     try {
@@ -22,11 +22,11 @@ export default function useTradeNotifications(statuses) {
         body,
         icon: "/icon.svg",
         badge: "/icon.svg",
-        tag, // prevents duplicate notifications for the same event
+        tag,
         silent: false,
       });
     } catch {
-      // Notification API not available (e.g. some mobile browsers)
+      // Notification API not available
     }
   }, []);
 

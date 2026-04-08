@@ -1,6 +1,21 @@
 {
   "startValue": 100,
   "wins": 6,
-  "losses": 7,
-  "positions": {}
+  "losses": 20,
+  "positions": {
+    "LINK/USD": {
+      "symbol": "LINK/USD",
+      "orderId": "42760ba1-4b56-485c-bf11-5c2b1d8da09c",
+      "entryPrice": 9.144,
+      "qty": 2.694966114,
+      "notional": 25.2,
+      "entryCost": 0.0378,
+      "entryTime": "2026-04-08T14:18:02.983Z",
+      "sma20": 9.141,
+      "rsi": 30.8,
+      "entryVolume": 0,
+      "fadingCount": 0,
+      "scalpMode": true
+    }
+  }
 }
