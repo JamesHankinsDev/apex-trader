@@ -11,6 +11,7 @@ const { setBearCooldown } = require('./bearStrategy');
 const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
 const scalp = require('./scalpEngine');
 const { recordScalpTrade, recordFeatureSnapshot, isCoinDisabled } = require('./scalpLog');
+const sizer = require('./positionSizer');
 const BenchmarkTracker = require('./benchmark');
 const benchmark = new BenchmarkTracker();
 
@@ -55,16 +56,18 @@ class ExperimentBot {
   constructor() {
     this.running = false;
     this.config = {
+      // Credentials from env (secrets only)
       apiKey: process.env.EXPERIMENT_1_ALPACA_API_KEY || '',
       secretKey: process.env.EXPERIMENT_1_ALPACA_SECRET_KEY || '',
       mode: 'paper',
+      // Watchlists from env
       watchlist: (process.env.EXPERIMENT_1_WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD').split(','),
       bearWatchlist: process.env.EXPERIMENT_1_WATCHLIST_BEAR
         ? process.env.EXPERIMENT_1_WATCHLIST_BEAR.split(',')
         : null,
-      scalpTradeSize: parseFloat(process.env.SCALP_TRADE_SIZE) || 25,
-      maxPositions: parseInt(process.env.EXPERIMENT_1_MAX_POSITIONS) || 2,
-      scanInterval: parseInt(process.env.EXPERIMENT_1_SCAN_INTERVAL_SECONDS) || 30,
+      // Strategy constants (tuned in code)
+      maxPositions: 2,
+      scalpTradeSize: 25,       // fallback if dynamic sizer not used
     };
 
     const saved = loadState();
@@ -533,6 +536,16 @@ class ExperimentBot {
             continue;
           }
 
+          const scalpConf = sizer.scoreScalp({ smaDipPct: sig.smaDip, rsi: sig.rsi });
+          const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
+          const scalpSize = sizer.calculateSize({
+            confidence: scalpConf,
+            portfolioValue: this.state.portfolioValue,
+            cashBalance: this.state.cashBalance,
+            currentExposure,
+            tradeType: 'scalp',
+          });
+          if (scalpSize.blocked) continue;
           recordFeatureSnapshot({
             bot: 'exp1', coin: sig.symbol, price: sig.price,
             sma20: sig.sma20, rsi14: sig.rsi, smaDipPct: sig.smaDip, expectedNetPct: 0,
@@ -541,7 +554,7 @@ class ExperimentBot {
             btcPrice: gate.btcPrice, btcGateOpen: gate.open,
             volumeRatio: sig.volumeRatio,
           });
-          await this.executeScalpEntry(sig, { regimeLabel });
+          await this.executeScalpEntry(sig, { regimeLabel, dynamicSize: scalpSize.size });
           openCount++;
         }
       }
@@ -575,7 +588,7 @@ class ExperimentBot {
 
   async executeScalpEntry(signal, opts = {}) {
     const { symbol, price, sma20, rsi } = signal;
-    const notional = Math.min(this.config.scalpTradeSize, this.state.cashBalance);
+    const notional = Math.min(opts.dynamicSize || this.config.scalpTradeSize, this.state.cashBalance);
     if (notional < 1) return;
 
     try {
@@ -622,8 +635,16 @@ class ExperimentBot {
 
   async executeBearEntry(bearSignal, signal) {
     const { symbol, price } = signal;
-    const targetNotional = this.state.portfolioValue * 0.33;
-    const notional = Math.min(targetNotional, this.state.cashBalance);
+    // Dead cat bounce uses swing-level sizing with high confidence (5-condition entry)
+    const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
+    const bearSize = sizer.calculateSize({
+      confidence: 0.8, // 5-condition entry = high conviction
+      portfolioValue: this.state.portfolioValue,
+      cashBalance: this.state.cashBalance,
+      currentExposure,
+      tradeType: 'swing',
+    });
+    const notional = bearSize.blocked ? 0 : Math.min(bearSize.size, this.state.cashBalance);
     if (notional < 1) return;
 
     try {
@@ -783,7 +804,7 @@ class ExperimentBot {
       config: {
         scalpTradeSize: this.config.scalpTradeSize,
         maxPositions: this.config.maxPositions,
-        scanInterval: this.config.scanInterval,
+        scanInterval: 'adaptive (15s/60s)',
         watchlist: this.config.watchlist,
         bearWatchlist: this.config.bearWatchlist || this.config.watchlist,
         activeWatchlist: this.state.activeWatchlist || this.config.watchlist,

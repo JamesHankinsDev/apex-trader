@@ -6,6 +6,7 @@ const alpaca = require('./alpaca');
 const { evaluate } = require('./breakout-strategy');
 const scalp = require('./scalpEngine');
 const { recordScalpTrade, recordFeatureSnapshot, isCoinDisabled } = require('./scalpLog');
+const sizer = require('./positionSizer');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { evaluateBearEntry2, addTranche, checkTrancheExit, clearTranches, getBtcAccumulationStatus } = require('./bearStrategy2');
@@ -62,24 +63,26 @@ class Experiment2Bot {
   constructor() {
     this.running = false;
     this.config = {
+      // Credentials from env (secrets only)
       apiKey: process.env.EXPERIMENT_2_ALPACA_API_KEY || '',
       secretKey: process.env.EXPERIMENT_2_ALPACA_SECRET_KEY || '',
       mode: 'paper',
+      // Watchlists from env
       watchlist: (process.env.EXPERIMENT_2_WATCHLIST || 'AVAX/USD,LINK/USD,AAVE/USD,DOT/USD,UNI/USD').split(','),
       bearWatchlist: process.env.EXPERIMENT_2_WATCHLIST_BEAR
         ? process.env.EXPERIMENT_2_WATCHLIST_BEAR.split(',')
         : null,
-      positionSize: 0.95,        // 95% of available balance
-      maxPositions: 1,           // Only one position at a time
-      trailingStopPct: 0.15,     // 15% trailing stop
-      hardStopPct: 0.20,         // 20% hard stop loss
-      takeProfitMultiple: 3,     // 3x initial stop distance
-      maxHoldHours: 72,          // 72-hour time exit
-      scanInterval: parseInt(process.env.EXPERIMENT_2_SCAN_INTERVAL_SECONDS) || 30,
-      minBalance: 15,            // Pause if balance < $15
-      cooldownCandles: 2,        // Skip 2 candles after stop-loss on same coin
-      scalpTradeSize: parseFloat(process.env.SCALP_TRADE_SIZE) || 25,
-      minScalpBalance: parseFloat(process.env.MIN_SCALP_BALANCE) || 30,
+      // Strategy constants (tuned in code)
+      positionSize: 0.95,        // fallback if dynamic sizer not used
+      maxPositions: 1,
+      trailingStopPct: 0.15,
+      hardStopPct: 0.20,
+      takeProfitMultiple: 3,
+      maxHoldHours: 72,
+      minBalance: 15,
+      cooldownCandles: 2,
+      scalpTradeSize: 25,        // fallback if dynamic sizer not used
+      minScalpBalance: 30,
     };
 
     const saved = loadState();
@@ -523,16 +526,27 @@ class Experiment2Bot {
                           console.log(`[EXP2][SCALP] Skipping BTC — spread filter: expected net ${expectedNet}% | ${countdown}`);
                         } else if (shouldEnter) {
                           const smaDip = ((btcPrice - sma20) / sma20 * 100).toFixed(3);
-                          recordFeatureSnapshot({
-                            bot: 'exp2', coin: 'BTC/USD', price: btcPrice,
-                            sma20, rsi14, smaDipPct: parseFloat(smaDip), expectedNetPct: parseFloat(expectedNet || '0'),
-                            regime: this._currentDetailedRegime?.state, regimeState: detailedState,
-                            fearGreed: this._currentDetailedRegime?.signals?.fng,
-                            btcPrice, btcGateOpen: false,
-                            volumeRatio: null,
+                          const btcScalpConf = sizer.scoreScalp({ smaDipPct: parseFloat(smaDip), rsi: rsi14, rsiThreshold: scalp.BTC_OVERRIDES.rsiThreshold, expectedNetPct: parseFloat(expectedNet || '0') });
+                          const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
+                          const btcScalpSize = sizer.calculateSize({
+                            confidence: btcScalpConf,
+                            portfolioValue: this.state.portfolioValue,
+                            cashBalance: this.state.cashBalance,
+                            currentExposure,
+                            tradeType: 'btcScalp',
                           });
-                          this.addEvent('info', `[EXP2][BEAR] BTC scalp opportunity | SMA $${sma20.toFixed(2)} RSI ${rsi14.toFixed(1)} dip ${smaDip}% | ${countdown}`);
-                          await this.executeBtcScalpEntry(btcPrice, sma20, rsi14, smaDip, countdown);
+                          if (!btcScalpSize.blocked) {
+                            recordFeatureSnapshot({
+                              bot: 'exp2', coin: 'BTC/USD', price: btcPrice,
+                              sma20, rsi14, smaDipPct: parseFloat(smaDip), expectedNetPct: parseFloat(expectedNet || '0'),
+                              regime: this._currentDetailedRegime?.state, regimeState: detailedState,
+                              fearGreed: this._currentDetailedRegime?.signals?.fng,
+                              btcPrice, btcGateOpen: false,
+                              volumeRatio: null,
+                            });
+                            this.addEvent('info', `[EXP2][BEAR] BTC scalp opportunity | SMA $${sma20.toFixed(2)} RSI ${rsi14.toFixed(1)} dip ${smaDip}% | conf ${btcScalpConf} size ${btcScalpSize.sizeLabel} | ${countdown}`);
+                            await this.executeBtcScalpEntry(btcPrice, sma20, rsi14, smaDip, countdown, btcScalpSize.size);
+                          }
                         }
                       }
                     } else {
@@ -597,8 +611,26 @@ class Experiment2Bot {
             continue;
           }
 
-          await this.executeEntry(sig, { sizeFactor, regimeLabel });
-          break; // Only one breakout entry per scan
+          const breakoutConf = sizer.scoreBreakout({
+            volumeRatio: sig.volumeRatio || 1.5,
+            rsi: sig.rsi || 60,
+            priceAboveHigh: sig.breakoutHigh > 0 ? ((sig.price - sig.breakoutHigh) / sig.breakoutHigh * 100) : 0,
+            regime: regime2,
+          });
+          const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
+          const breakoutSize = sizer.calculateSize({
+            confidence: breakoutConf,
+            portfolioValue: this.state.portfolioValue,
+            cashBalance: this.state.cashBalance,
+            currentExposure,
+            tradeType: 'breakout',
+          });
+          if (breakoutSize.blocked) {
+            this.addEvent('info', `[EXP2] Breakout size blocked for ${sig.symbol}: ${breakoutSize.reason}`);
+            continue;
+          }
+          await this.executeEntry(sig, { dynamicNotional: breakoutSize.size, regimeLabel });
+          break;
         }
       }
 
@@ -630,6 +662,16 @@ class Experiment2Bot {
         if (spreadBlocked) {
           console.log(`[EXP2][SCALP] Skipping ${sig.symbol} — spread filter: expected net ${expectedNet}%`);
         } else if (shouldEnter) {
+          const scalpConf = sizer.scoreScalp({ smaDipPct: parseFloat(smaDip), rsi: rsi14, rsiThreshold, expectedNetPct: parseFloat(expectedNet || '0') });
+          const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
+          const scalpSize = sizer.calculateSize({
+            confidence: scalpConf,
+            portfolioValue: this.state.portfolioValue,
+            cashBalance: this.state.cashBalance,
+            currentExposure,
+            tradeType: 'scalp',
+          });
+          if (scalpSize.blocked) continue;
           recordFeatureSnapshot({
             bot: 'exp2', coin: sig.symbol, price: sig.price,
             sma20, rsi14, smaDipPct: parseFloat(smaDip), expectedNetPct: parseFloat(expectedNet || '0'),
@@ -638,7 +680,7 @@ class Experiment2Bot {
             btcPrice: gate.btcPrice, btcGateOpen: gate.open,
             volumeRatio: sig.volumeRatio,
           });
-          await this.executeScalpEntry(sig, sma20, rsi14, smaDip, regimeLabel);
+          await this.executeScalpEntry(sig, sma20, rsi14, smaDip, regimeLabel, scalpSize.size);
         }
       }
     }
@@ -672,11 +714,10 @@ class Experiment2Bot {
 
   async executeEntry(signal, opts = {}) {
     const { symbol, price } = signal;
-    const sizeFactor = opts.sizeFactor || 1.0;
-    const notional = Math.min(
-      this.state.portfolioValue * this.config.positionSize * sizeFactor,
-      this.state.cashBalance
-    );
+    // Use dynamic sizing if provided, otherwise fall back to config
+    const notional = opts.dynamicNotional
+      ? Math.min(opts.dynamicNotional, this.state.cashBalance)
+      : Math.min(this.state.portfolioValue * this.config.positionSize * (opts.sizeFactor || 1.0), this.state.cashBalance);
     if (notional < 1) return;
 
     try {
@@ -736,9 +777,9 @@ class Experiment2Bot {
 
   // ─── SCALP ENTRY (BULL MODE) ────────────────────────────────
 
-  async executeScalpEntry(signal, sma20, rsi, smaDip, regimeLabel) {
+  async executeScalpEntry(signal, sma20, rsi, smaDip, regimeLabel, dynamicSize) {
     const { symbol, price } = signal;
-    const notional = Math.min(this.config.scalpTradeSize, this.state.cashBalance);
+    const notional = Math.min(dynamicSize || this.config.scalpTradeSize, this.state.cashBalance);
     if (notional < 1) return;
 
     try {
@@ -781,9 +822,9 @@ class Experiment2Bot {
 
   // ─── BTC SCALP ENTRY (BEAR MODE) ────────────────────────────
 
-  async executeBtcScalpEntry(btcPrice, sma20, rsi, smaDip, countdown) {
+  async executeBtcScalpEntry(btcPrice, sma20, rsi, smaDip, countdown, dynamicSize) {
     const symbol = 'BTC/USD';
-    const notional = Math.min(this.config.scalpTradeSize / 2, this.state.cashBalance); // half size for BTC
+    const notional = Math.min(dynamicSize || this.config.scalpTradeSize / 2, this.state.cashBalance);
     if (notional < 1) return;
 
     try {
@@ -1121,7 +1162,7 @@ class Experiment2Bot {
         hardStopPct: this.config.hardStopPct,
         takeProfitMultiple: this.config.takeProfitMultiple,
         maxHoldHours: this.config.maxHoldHours,
-        scanInterval: this.config.scanInterval,
+        scanInterval: 'adaptive (15s/60s)',
         minBalance: this.config.minBalance,
         cooldownCandles: this.config.cooldownCandles,
         scalpTradeSize: this.config.scalpTradeSize,

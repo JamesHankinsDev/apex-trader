@@ -13,9 +13,9 @@ export default function BottomNav({ activeSection, setActiveSection, activeBot, 
       {/* Bot switcher row */}
       <div className={styles.bottomNavBotRow}>
         {[
-          { key: "main", label: "Main" },
-          { key: "experiment", label: "Exp 1" },
-          { key: "experiment2", label: "Exp 2" },
+          { key: "main", label: "Exp 1" },
+          { key: "experiment", label: "Exp 2" },
+          { key: "experiment2", label: "Exp 3" },
         ].map((b) => (
           <button
             key={b.key}

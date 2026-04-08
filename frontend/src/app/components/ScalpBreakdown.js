@@ -2,9 +2,9 @@ import styles from "../page.module.css";
 import { fmt$ } from "./helpers";
 
 const BOTS = [
-  { key: "main", label: "Main", color: "#00ff88" },
-  { key: "exp1", label: "Exp 1", color: "#4488ff" },
-  { key: "exp2", label: "Exp 2", color: "#ff9900" },
+  { key: "main", label: "Exp 1", color: "#00ff88" },
+  { key: "exp1", label: "Exp 2", color: "#4488ff" },
+  { key: "exp2", label: "Exp 3", color: "#ff9900" },
 ];
 
 export default function ScalpBreakdown({ scalpLog, leaderboard }) {

@@ -9,6 +9,8 @@ const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate
 const { getChannelData } = require('./bearStrategy');
 const { getPerformanceStats, getWeeklySnapshots } = require('./performance');
 const { getScalpLogStatus } = require('./scalpLog');
+const { getEvaluation } = require('./experimentScorer');
+const liveTrader = require('./liveTrader');
 const alpaca = require('./alpaca');
 
 const app = express();
@@ -241,30 +243,37 @@ app.post('/api/bot2/trade', async (req, res) => {
 
 // ─── LEADERBOARD ─────────────────────────────────────────────
 app.get('/api/leaderboard', (req, res) => {
-  const main = getPerformanceStats('main');
-  const exp1 = getPerformanceStats('exp1');
-  const exp2 = getPerformanceStats('exp2');
-
-  // Determine leader: prefer Sharpe if available for all, otherwise totalReturnPct
-  let leader = 'main';
-  let leadMetric = 'totalReturn';
-
-  if (main.sharpeRatio != null && exp1.sharpeRatio != null && exp2.sharpeRatio != null) {
-    leadMetric = 'sharpe';
-    if (exp1.sharpeRatio > main.sharpeRatio && exp1.sharpeRatio > exp2.sharpeRatio) leader = 'exp1';
-    else if (exp2.sharpeRatio > main.sharpeRatio && exp2.sharpeRatio > exp1.sharpeRatio) leader = 'exp2';
-  } else {
-    if (exp1.totalReturnPct > main.totalReturnPct && exp1.totalReturnPct > exp2.totalReturnPct) leader = 'exp1';
-    else if (exp2.totalReturnPct > main.totalReturnPct && exp2.totalReturnPct > exp1.totalReturnPct) leader = 'exp2';
-  }
-
+  const evaluation = getEvaluation();
   res.json({
     updatedAt: new Date().toISOString(),
-    bots: { main, exp1, exp2 },
-    leader,
-    leadMetric,
+    bots: {
+      main: evaluation.scores.main.stats,
+      exp1: evaluation.scores.exp1.stats,
+      exp2: evaluation.scores.exp2.stats,
+    },
+    leader: evaluation.winner,
+    leadMetric: 'experimentScore',
+    experimentScores: {
+      main: { score: evaluation.scores.main.score, breakdown: evaluation.scores.main.breakdown, eligible: evaluation.scores.main.eligible },
+      exp1: { score: evaluation.scores.exp1.score, breakdown: evaluation.scores.exp1.breakdown, eligible: evaluation.scores.exp1.eligible },
+      exp2: { score: evaluation.scores.exp2.score, breakdown: evaluation.scores.exp2.breakdown, eligible: evaluation.scores.exp2.eligible },
+    },
     weeklySnapshots: getWeeklySnapshots(),
   });
+});
+
+// ─── LIVE TRADER ─────────────────────────────────────────────
+app.get('/api/live-trader/status', (req, res) => {
+  res.json(liveTrader.getStatus());
+});
+
+app.post('/api/live-trader/start', async (req, res) => {
+  const result = await liveTrader.start({ main: bot, exp1: experimentBot, exp2: experiment2Bot });
+  res.json(result);
+});
+
+app.post('/api/live-trader/stop', (req, res) => {
+  res.json(liveTrader.stop());
 });
 
 // ─── SCALP LOG ───────────────────────────────────────────────
@@ -296,5 +305,15 @@ app.listen(PORT, () => {
   if (process.env.EXPERIMENT_2_ALPACA_API_KEY && process.env.EXPERIMENT_2_ALPACA_SECRET_KEY) {
     console.log('🧪 Auto-starting experiment 2 bot (Momentum Breakout)...');
     experiment2Bot.start().then(r => console.log('   Experiment 2 start:', r.msg));
+  }
+
+  // Auto-start live trader if enabled and credentials are set
+  if (process.env.LIVE_TRADER_ENABLED === 'true' && process.env.LIVE_TRADER_API_KEY) {
+    console.log('🏆 Auto-starting live trader (mirrors winning experiment)...');
+    // Delay slightly to let experiments initialize first
+    setTimeout(() => {
+      liveTrader.start({ main: bot, exp1: experimentBot, exp2: experiment2Bot })
+        .then(r => console.log('   Live trader:', r.msg));
+    }, 10000);
   }
 });

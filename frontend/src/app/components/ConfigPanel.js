@@ -58,7 +58,7 @@ export default function ConfigPanel({ botType, botStatus, config, running, onSta
 
   return (
     <>
-      <div className={styles.panelTitle}>{"\u25B2"} {botType === "main" ? "CONFIGURATION" : botType === "exp1" ? "EXPERIMENT CONFIG" : "BREAKOUT CONFIG"}</div>
+      <div className={styles.panelTitle}>{"\u25B2"} {botType === "main" ? "EXP 1 CONFIG" : botType === "exp1" ? "EXP 2 CONFIG" : "EXP 3 CONFIG"}</div>
 
       {/* Strategy explainer */}
       {explainer && (
@@ -112,7 +112,7 @@ export default function ConfigPanel({ botType, botStatus, config, running, onSta
           </div>
         ))}
         <div className={styles.hint} style={{ marginTop: 12 }}>
-          {botType === "main" ? "Set via environment variables. Restart bot to apply changes." : botType === "exp1" ? "Set via EXPERIMENT_* environment variables." : "Uses EXPERIMENT_* API credentials. Separate internal state."}
+          Strategy parameters are configured in code. Watchlists and API credentials are set via environment variables.
         </div>
       </div>
 
@@ -120,11 +120,11 @@ export default function ConfigPanel({ botType, botStatus, config, running, onSta
       <div className={styles.configSection}>
         {!running ? (
           <button className={styles.btnStart} onClick={onStart} disabled={connecting}>
-            {connecting ? "CONNECTING..." : botType === "main" ? "\u25B6 START BOT" : botType === "exp1" ? "\u25B6 START EXPERIMENT" : "\u25B6 START EXPERIMENT 2"}
+            {connecting ? "CONNECTING..." : botType === "main" ? "\u25B6 START EXP 1" : botType === "exp1" ? "\u25B6 START EXP 2" : "\u25B6 START EXP 3"}
           </button>
         ) : (
           <button className={styles.btnStop} onClick={onStop}>
-            {"\u25A0"} {botType === "main" ? "STOP BOT" : botType === "exp1" ? "STOP EXPERIMENT" : "STOP EXPERIMENT 2"}
+            {"\u25A0"} {botType === "main" ? "STOP EXP 1" : botType === "exp1" ? "STOP EXP 2" : "STOP EXP 3"}
           </button>
         )}
       </div>

@@ -10,12 +10,12 @@
       "notional": 85.524567290208,
       "entryCost": 0.128286850935312,
       "entryTime": "2026-04-06T03:34:17.844Z",
-      "highWaterMark": 82.2828,
-      "trailingStop": 69.94037999999999,
+      "highWaterMark": 86.4013,
+      "trailingStop": 73.44110500000001,
       "hardStop": 65.3616,
       "takeProfit": 118.4679,
       "orderId": null,
-      "livePrice": 82.047
+      "livePrice": 84.16
     }
   },
   "cooldowns": {}

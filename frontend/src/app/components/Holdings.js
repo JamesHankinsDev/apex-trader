@@ -2,9 +2,9 @@ import styles from "../page.module.css";
 import { fmt$ } from "./helpers";
 
 const BOT_META = {
-  main: { label: "Main", color: "#00ff88" },
-  exp1: { label: "Exp 1", color: "#4488ff" },
-  exp2: { label: "Exp 2", color: "#ff9900" },
+  main: { label: "Exp 1", color: "#00ff88" },
+  exp1: { label: "Exp 2", color: "#4488ff" },
+  exp2: { label: "Exp 3", color: "#ff9900" },
 };
 
 function formatHold(entryTime) {

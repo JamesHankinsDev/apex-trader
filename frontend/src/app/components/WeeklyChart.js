@@ -16,9 +16,9 @@ export default function WeeklyChart({ snapshots }) {
     ctx.clearRect(0, 0, W, H);
 
     const bots = [
-      { key: "main", color: "#00ff88", label: "Main" },
-      { key: "exp1", color: "#4488ff", label: "Exp1" },
-      { key: "exp2", color: "#ff9900", label: "Exp2" },
+      { key: "main", color: "#00ff88", label: "Exp1" },
+      { key: "exp1", color: "#4488ff", label: "Exp2" },
+      { key: "exp2", color: "#ff9900", label: "Exp3" },
     ];
 
     const allVals = [];

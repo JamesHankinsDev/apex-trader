@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useEffect } from "react";
 import { createChart, ColorType, LineStyle, CrosshairMode, AreaSeries, LineSeries } from "lightweight-charts";
+import { PERIODS } from "./helpers";
 
 // Convert [{t: unix_ms, v: number}] to [{time: unix_sec, value: number}]
 function toChartData(arr) {
@@ -56,7 +57,7 @@ export default function EquityChart({ data, startValue, equalHistory, mcapHistor
       },
       timeScale: {
         borderColor: "rgba(26,26,46,0.8)",
-        timeVisible: period === "1D",
+        timeVisible: !periodCfg.useDaily,
         secondsVisible: false,
         rightOffset: 2,
         fixLeftEdge: true,
@@ -77,6 +78,7 @@ export default function EquityChart({ data, startValue, equalHistory, mcapHistor
     const areaBottomColor = "rgba(0,0,0,0)";
 
     const isMobileChart = container.clientWidth < 500;
+    const periodCfg = PERIODS[period] || PERIODS["1D"];
 
     // Portfolio area series (v5 API: chart.addSeries(AreaSeries, options))
     const portfolioSeries = chart.addSeries(AreaSeries, {

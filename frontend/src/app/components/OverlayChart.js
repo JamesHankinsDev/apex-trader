@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useEffect } from "react";
 import { createChart, ColorType, CrosshairMode, LineSeries } from "lightweight-charts";
+import { PERIODS, filterByPeriod } from "./helpers";
 import styles from "../page.module.css";
 
 const BOT_COLORS = {
@@ -10,9 +11,9 @@ const BOT_COLORS = {
 };
 
 const BOT_LABELS = {
-  main: "Main Bot",
-  exp1: "Experiment 1",
-  exp2: "Experiment 2",
+  main: "Exp 1",
+  exp1: "Exp 2",
+  exp2: "Exp 3",
 };
 
 // Convert [{t: unix_ms, v: number}] to [{time: unix_sec, value: number}]
@@ -34,9 +35,10 @@ function toReturnData(arr, startValue) {
     });
 }
 
-export default function OverlayChart({ bots, period }) {
+export default function OverlayChart({ bots, period, setPeriod }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
+  const pCfg = PERIODS[period] || PERIODS["1D"];
 
   useEffect(() => {
     const container = containerRef.current;
@@ -47,9 +49,11 @@ export default function OverlayChart({ bots, period }) {
       chartRef.current = null;
     }
 
+    const isMobileChart = container.clientWidth < 500;
+
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 220,
+      height: 240,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
         textColor: "#667799",
@@ -71,7 +75,8 @@ export default function OverlayChart({ bots, period }) {
       },
       timeScale: {
         borderColor: "rgba(26,26,46,0.8)",
-        timeVisible: period === "1D",
+        timeVisible: !pCfg.useDaily,
+        secondsVisible: false,
         rightOffset: 2,
         fixLeftEdge: true,
         fixRightEdge: true,
@@ -90,18 +95,20 @@ export default function OverlayChart({ bots, period }) {
       crosshairMarkerVisible: false,
     });
 
-    // Add each bot as a line
+    let zeroSet = false;
+
     for (const bot of bots) {
-      const data = toReturnData(bot.equityHistory, bot.startValue);
+      // Filter by period
+      const filtered = filterByPeriod(bot.equityHistory, pCfg.ms);
+      const data = toReturnData(filtered, bot.startValue);
       if (data.length < 2) continue;
 
-      // Set zero line range from first bot's data
-      if (zeroSeries.data?.length === 0 || !zeroSeries._hasData) {
+      if (!zeroSet) {
         zeroSeries.setData([
           { time: data[0].time, value: 0 },
           { time: data[data.length - 1].time, value: 0 },
         ]);
-        zeroSeries._hasData = true;
+        zeroSet = true;
       }
 
       const series = chart.addSeries(LineSeries, {
@@ -111,7 +118,7 @@ export default function OverlayChart({ bots, period }) {
         crosshairMarkerBorderColor: BOT_COLORS[bot.key],
         crosshairMarkerBackgroundColor: BOT_COLORS[bot.key],
         priceFormat: { type: "custom", formatter: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` },
-        title: BOT_LABELS[bot.key],
+        title: isMobileChart ? "" : BOT_LABELS[bot.key],
         lastValueVisible: true,
         priceLineVisible: false,
       });
@@ -132,13 +139,13 @@ export default function OverlayChart({ bots, period }) {
       chart.remove();
       chartRef.current = null;
     };
-  }, [bots, period]);
+  }, [bots, period, pCfg]);
 
   return (
-    <div style={{ padding: "0 24px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 8 }}>
-        <span className={styles.chartLabel} style={{ marginBottom: 0 }}>ALL BOTS — RETURN %</span>
-        <div style={{ display: "flex", gap: 12, marginLeft: "auto" }}>
+    <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--border)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
+        <span className={styles.chartLabel} style={{ marginBottom: 0 }}>ALL BOTS \u2014 RETURN %</span>
+        <div style={{ display: "flex", gap: 12 }}>
           {Object.entries(BOT_LABELS).map(([key, label]) => (
             <span key={key} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontFamily: "var(--font-mono)" }}>
               <span style={{ width: 10, height: 3, background: BOT_COLORS[key], display: "inline-block", borderRadius: 1 }} />
@@ -146,8 +153,18 @@ export default function OverlayChart({ bots, period }) {
             </span>
           ))}
         </div>
+        <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+          {Object.keys(PERIODS).map(p => (
+            <button key={p} onClick={() => setPeriod(p)} style={{
+              padding: "3px 10px", fontSize: 10, fontFamily: "var(--font-mono)",
+              letterSpacing: 1, border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer",
+              background: period === p ? "rgba(68,136,255,0.2)" : "transparent",
+              color: period === p ? "#4488ff" : "var(--dim)",
+            }}>{p}</button>
+          ))}
+        </div>
       </div>
-      <div ref={containerRef} style={{ width: "100%", minHeight: 220 }} />
+      <div ref={containerRef} style={{ width: "100%", minHeight: 240 }} />
     </div>
   );
 }

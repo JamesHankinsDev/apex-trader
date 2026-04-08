@@ -2,7 +2,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { fmt$ } from "./helpers";
 
-const BOT_NAMES = { main: "Main Bot", exp1: "Exp 1", exp2: "Exp 2" };
+const BOT_NAMES = { main: "Exp 1", exp1: "Exp 2", exp2: "Exp 3" };
 
 /**
  * Hook that fires browser notifications when trades are detected.

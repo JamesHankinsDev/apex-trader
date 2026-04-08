@@ -5,6 +5,7 @@ const alpaca = require('./alpaca');
 const { evaluateSignal, evaluateHigherTimeframe } = require('./strategy');
 const scalp = require('./scalpEngine');
 const { recordScalpTrade, recordFeatureSnapshot, isCoinDisabled } = require('./scalpLog');
+const sizer = require('./positionSizer');
 const BenchmarkTracker = require('./benchmark');
 const benchmark = new BenchmarkTracker();
 const cryptoStream = require('./crypto-stream');
@@ -46,15 +47,11 @@ function savePersistedState(state) {
 // Alpaca crypto spread cost estimate per side (~0.15% each way)
 const SPREAD_COST_PCT = 0.0015;
 
-// Risk management limits (configurable via .env)
-const MAX_CONCURRENT_POSITIONS = parseInt(process.env.MAX_POSITIONS) || 3;
-const DAILY_LOSS_LIMIT_PCT = parseFloat(process.env.DAILY_LOSS_LIMIT_PCT) || 0.05;
-
-// Time-based exit: close positions held longer than this (in hours)
-const MAX_HOLD_HOURS = parseInt(process.env.MAX_HOLD_HOURS) || 24;
-
-// Minimum signal score to enter a position
-const ENTRY_SCORE_THRESHOLD = parseInt(process.env.ENTRY_SCORE_THRESHOLD) || 65;
+// ─── Strategy constants (tuned in code, not env vars) ────────
+const MAX_CONCURRENT_POSITIONS = 3;
+const DAILY_LOSS_LIMIT_PCT = 0.05;    // halt entries after -5% daily
+const MAX_HOLD_HOURS = 24;            // swing max hold
+const ENTRY_SCORE_THRESHOLD = 65;     // minimum score to enter
 
 // Poll Alpaca for actual fill price (market orders usually fill within seconds)
 async function getFillPrice(apiKey, secretKey, mode, orderId, fallbackPrice) {
@@ -78,25 +75,25 @@ class TradingBot {
   constructor() {
     this.running = false;
     this.config = {
+      // Credentials from env (secrets only)
       apiKey: process.env.ALPACA_API_KEY || '',
       secretKey: process.env.ALPACA_SECRET_KEY || '',
       mode: process.env.ALPACA_MODE || 'paper',
-      positionSize: parseFloat(process.env.POSITION_SIZE) || 0.33,
-      stopLoss: parseFloat(process.env.STOP_LOSS) || 0.05,
-      takeProfit: parseFloat(process.env.TAKE_PROFIT) || 0.15,
-      rsiBuy: parseInt(process.env.RSI_BUY_BELOW) || 35,
-      rsiSell: parseInt(process.env.RSI_SELL_ABOVE) || 70,
-      scanInterval: parseInt(process.env.SCAN_INTERVAL_SECONDS) || 30,
-      scalpTradeSize: parseFloat(process.env.SCALP_TRADE_SIZE) || 25,
+      // Watchlists from env
       watchlist: (process.env.WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD,DOGE/USD,AVAX/USD').split(','),
       bearWatchlist: process.env.WATCHLIST_BEAR
         ? process.env.WATCHLIST_BEAR.split(',')
-        : null, // falls back to watchlist if not set
+        : null,
+      // Strategy constants (tuned in code)
+      stopLoss: 0.05,
+      takeProfit: 0.15,
+      rsiBuy: 35,
+      rsiSell: 70,
       maxPositions: MAX_CONCURRENT_POSITIONS,
       dailyLossLimit: DAILY_LOSS_LIMIT_PCT,
       maxHoldHours: MAX_HOLD_HOURS,
       entryScoreThreshold: ENTRY_SCORE_THRESHOLD,
-      profitGiveback: parseFloat(process.env.PROFIT_GIVEBACK) || 0.25,
+      profitGiveback: 0.25,
     };
 
     const saved = loadPersistedState();
@@ -541,16 +538,35 @@ class TradingBot {
               if ((candidate.volumeRatio || 0) < 2.0) continue;
               if ((candidate.sixHourChange || 0) < 2.0) continue;
               if ((this._currentDetailedRegime?.signals?.gapPct || -5) > -3) continue;
+              const bearRallyConf = sizer.scoreBearRally({
+                btcBounce: candidate.sixHourChange || 3,
+                rsi: candidate.rsi,
+                volumeRatio: candidate.volumeRatio || 2,
+                fearGreed: this._currentDetailedRegime?.signals?.fng || 20,
+              });
+              const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
+              const bearRallySize = sizer.calculateSize({
+                confidence: bearRallyConf,
+                portfolioValue: this.state.portfolioValue,
+                cashBalance: this.state.cashBalance,
+                currentExposure,
+                atrPct: candidate.atrPct || 2,
+                tradeType: 'bearRally',
+              });
+              if (bearRallySize.blocked) {
+                this.addEvent('info', `[MAIN][BEAR_RALLY] Size blocked for ${candidate.symbol}: ${bearRallySize.reason}`);
+                continue;
+              }
               this.addEvent('info',
-                `[MAIN][BEAR_RALLY] Micro-entry: ${candidate.symbol} | RSI ${candidate.rsi.toFixed(0)} Vol ×${(candidate.volumeRatio || 0).toFixed(1)} 6h +${(candidate.sixHourChange || 0).toFixed(1)}%`
+                `[MAIN][BEAR_RALLY] Micro-entry: ${candidate.symbol} | RSI ${candidate.rsi.toFixed(0)} Vol ×${(candidate.volumeRatio || 0).toFixed(1)} 6h +${(candidate.sixHourChange || 0).toFixed(1)}% | conf ${bearRallyConf} size ${bearRallySize.sizeLabel}`
               );
               await this.executeEntry(candidate, {
-                sizeFactor: 0.25,
+                dynamicNotional: bearRallySize.size,
                 takeProfitPct: 0.015,
                 regimeLabel: 'Bear Rally Scalp',
                 bearRally: true,
                 btcRallyHigh: gate.btcPrice,
-                maxHoldMs: 25 * 60 * 1000, // 25 minutes
+                maxHoldMs: 25 * 60 * 1000,
               });
               openCount++;
               break; // Max 1 bear rally position
@@ -644,7 +660,22 @@ class TradingBot {
           this.addEvent('warning', `HTF check failed for ${candidate.symbol}: ${err.message} — entering anyway`);
         }
 
-        await this.executeEntry(candidate, { sizeFactor, tightStops, regimeLabel });
+        const htfOk = true; // passed HTF check above
+        const swingConf = sizer.scoreSwing({ score: candidate.score, regime: regime2, htfConfirmed: htfOk });
+        const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
+        const swingSize = sizer.calculateSize({
+          confidence: swingConf,
+          portfolioValue: this.state.portfolioValue,
+          cashBalance: this.state.cashBalance,
+          currentExposure,
+          atrPct: candidate.atrPct || 2,
+          tradeType: 'swing',
+        });
+        if (swingSize.blocked) {
+          this.addEvent('info', `[MAIN] Swing size blocked for ${candidate.symbol}: ${swingSize.reason}`);
+          continue;
+        }
+        await this.executeEntry(candidate, { dynamicNotional: swingSize.size, tightStops, regimeLabel });
         swingCount++;
       }
 
@@ -669,6 +700,17 @@ class TradingBot {
         if (spreadBlocked) {
           console.log(`[MAIN][SCALP] Skipping ${candidate.symbol} — spread filter: expected net ${expectedNet}%`);
         } else if (shouldEnter) {
+          const scalpConf = sizer.scoreScalp({ smaDipPct: parseFloat(smaDip), rsi: rsi14, expectedNetPct: parseFloat(expectedNet || '0') });
+          const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
+          const scalpSize = sizer.calculateSize({
+            confidence: scalpConf,
+            portfolioValue: this.state.portfolioValue,
+            cashBalance: this.state.cashBalance,
+            currentExposure,
+            atrPct: candidate.atrPct || 2,
+            tradeType: 'scalp',
+          });
+          if (scalpSize.blocked) continue;
           recordFeatureSnapshot({
             bot: 'main', coin: candidate.symbol, price: candidate.price,
             sma20, rsi14, smaDipPct: parseFloat(smaDip), expectedNetPct: parseFloat(expectedNet || '0'),
@@ -677,7 +719,7 @@ class TradingBot {
             btcPrice: gate.btcPrice, btcGateOpen: gate.open,
             volumeRatio: candidate.volumeRatio,
           });
-          await this.executeScalpEntry(candidate, sma20, rsi14, smaDip, regimeLabel);
+          await this.executeScalpEntry(candidate, sma20, rsi14, smaDip, regimeLabel, scalpSize.size);
         }
       }
       }
@@ -717,11 +759,12 @@ class TradingBot {
 
   async executeEntry(signal, opts = {}) {
     const { symbol, price } = signal;
-    const sizeFactor = opts.sizeFactor || 1.0;
     const stopLossPct = opts.tightStops ? Math.min(this.config.stopLoss, 0.03) : this.config.stopLoss;
     const takeProfitPct = opts.takeProfitPct || this.config.takeProfit;
-    const targetNotional = this.state.portfolioValue * this.config.positionSize * sizeFactor;
-    const notional = Math.min(targetNotional, this.state.cashBalance);
+    // Use dynamic notional if provided, otherwise fall back to config-based sizing
+    const notional = opts.dynamicNotional
+      ? Math.min(opts.dynamicNotional, this.state.cashBalance)
+      : Math.min(this.state.portfolioValue * this.config.positionSize * (opts.sizeFactor || 1.0), this.state.cashBalance);
 
     if (notional < 1) {
       this.addEvent('warning', `Skipping ${symbol} — insufficient cash ($${this.state.cashBalance.toFixed(2)})`);
@@ -789,9 +832,9 @@ class TradingBot {
 
   // ─── SCALP ENTRY (BULL MODE) ────────────────────────────────
 
-  async executeScalpEntry(signal, sma20, rsi, smaDip, regimeLabel) {
+  async executeScalpEntry(signal, sma20, rsi, smaDip, regimeLabel, dynamicSize) {
     const { symbol, price } = signal;
-    const notional = Math.min(this.config.scalpTradeSize, this.state.cashBalance);
+    const notional = Math.min(dynamicSize || this.config.scalpTradeSize, this.state.cashBalance);
     if (notional < 1) return;
 
     try {
@@ -1236,7 +1279,7 @@ class TradingBot {
         takeProfit: this.config.takeProfit,
         rsiBuy: this.config.rsiBuy,
         rsiSell: this.config.rsiSell,
-        scanInterval: this.config.scanInterval,
+        scanInterval: 'adaptive (15s/60s)',
         watchlist: this.config.watchlist,
         bearWatchlist: this.config.bearWatchlist || this.config.watchlist,
         activeWatchlist: this.state.activeWatchlist || this.config.watchlist,

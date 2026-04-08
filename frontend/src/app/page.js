@@ -46,8 +46,6 @@ export default function Dashboard() {
   const [exp2Connecting, setExp2Connecting] = useState(false);
   const [leaderboard, setLeaderboard] = useState(null);
   const [chartPeriod, setChartPeriod] = useState("1D");
-  const [expChartPeriod, setExpChartPeriod] = useState("1D");
-  const [exp2ChartPeriod, setExp2ChartPeriod] = useState("1D");
   const [mobileSection, setMobileSection] = useState("dashboard");
   const [scalpLog, setScalpLog] = useState(null);
 
@@ -146,8 +144,8 @@ export default function Dashboard() {
   // Per-tab props
   const tabProps = {
     main: { botType: "main", botStatus: status, config, running: status?.running, connecting, onStart: handleStart, onStop: handleStop, chartPeriod, setChartPeriod, onSell: (sym) => sellPosition("/api/trade", sym, fetchStatus) },
-    experiment: { botType: "exp1", botStatus: expStatus, running: expStatus?.running, connecting: expConnecting, onStart: handleExpStart, onStop: handleExpStop, chartPeriod: expChartPeriod, setChartPeriod: setExpChartPeriod, onSell: (sym) => sellPosition("/api/experiment/trade", sym, fetchExpStatus) },
-    experiment2: { botType: "exp2", botStatus: exp2Status, running: exp2Status?.running, connecting: exp2Connecting, onStart: handleExp2Start, onStop: handleExp2Stop, chartPeriod: exp2ChartPeriod, setChartPeriod: setExp2ChartPeriod, onSell: (sym) => sellPosition("/api/bot2/trade", sym, fetchExp2Status) },
+    experiment: { botType: "exp1", botStatus: expStatus, running: expStatus?.running, connecting: expConnecting, onStart: handleExpStart, onStop: handleExpStop, chartPeriod, setChartPeriod, onSell: (sym) => sellPosition("/api/experiment/trade", sym, fetchExpStatus) },
+    experiment2: { botType: "exp2", botStatus: exp2Status, running: exp2Status?.running, connecting: exp2Connecting, onStart: handleExp2Start, onStop: handleExp2Stop, chartPeriod, setChartPeriod, onSell: (sym) => sellPosition("/api/bot2/trade", sym, fetchExp2Status) },
   };
   const active = tabProps[activeTab];
 
@@ -169,6 +167,7 @@ export default function Dashboard() {
             { key: "exp2", equityHistory: exp2Status?.equityHistory, startValue: exp2Status?.startValue },
           ]}
           period={chartPeriod}
+          setPeriod={setChartPeriod}
         />
       )}
       <ScalpBreakdown scalpLog={scalpLog} leaderboard={leaderboard} />
@@ -252,15 +251,21 @@ function BotTabContent({ botType, botStatus, config, running, connecting, onStar
       ? (regime?.current === "bear" ? "SIGNALS (Range Trading)" : "HYBRID SIGNALS (Mean Reversion + Momentum)")
       : (regime?.current === "bear" ? "SIGNALS (BTC Accumulation)" : "BREAKOUT SIGNALS (20-Bar Momentum)");
 
-  const chartLabel = botType === "main" ? "PORTFOLIO EQUITY" : botType === "exp1" ? "EXP 1 EQUITY" : "EXP 2 EQUITY";
+  const chartLabel = botType === "main" ? "EXP 1 EQUITY" : botType === "exp1" ? "EXP 2 EQUITY" : "EXP 3 EQUITY";
 
-  // Chart data
+  // Chart data — filter equity and benchmarks by selected period
   const pCfg = PERIODS[chartPeriod] || PERIODS["1D"];
   const bm = bs?.benchmarks;
-  const eqH = pCfg.useDaily ? bm?.equalWeight?.dailyHistory : filterByPeriod(bm?.equalWeight?.history, pCfg.ms);
-  const mcH = pCfg.useDaily ? bm?.mcapWeight?.dailyHistory : filterByPeriod(bm?.mcapWeight?.history, pCfg.ms);
-  const btH = pCfg.useDaily ? bm?.btcOnly?.dailyHistory : filterByPeriod(bm?.btcOnly?.history, pCfg.ms);
-  const filteredEquity = (bs?.equityHistory || []).filter(d => d.t >= Date.now() - pCfg.ms);
+  const eqH = pCfg.useDaily
+    ? (pCfg.ms === Infinity ? bm?.equalWeight?.dailyHistory : filterByPeriod(bm?.equalWeight?.dailyHistory, pCfg.ms))
+    : filterByPeriod(bm?.equalWeight?.history, pCfg.ms);
+  const mcH = pCfg.useDaily
+    ? (pCfg.ms === Infinity ? bm?.mcapWeight?.dailyHistory : filterByPeriod(bm?.mcapWeight?.dailyHistory, pCfg.ms))
+    : filterByPeriod(bm?.mcapWeight?.history, pCfg.ms);
+  const btH = pCfg.useDaily
+    ? (pCfg.ms === Infinity ? bm?.btcOnly?.dailyHistory : filterByPeriod(bm?.btcOnly?.dailyHistory, pCfg.ms))
+    : filterByPeriod(bm?.btcOnly?.history, pCfg.ms);
+  const filteredEquity = filterByPeriod(bs?.equityHistory, pCfg.ms);
 
   const bearSignal = regime?.current === "bear" && bs?.lastBearSignal;
 

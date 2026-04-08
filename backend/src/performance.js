@@ -106,8 +106,9 @@ function getPerformanceStats(bot) {
     if (dd > maxDrawdownPct) maxDrawdownPct = dd;
   }
 
-  // Sharpe ratio (simplified daily)
+  // Sharpe and Sortino ratios (simplified daily)
   const sharpeRatio = calculateSharpe(trades);
+  const sortinoRatio = calculateSortino(trades);
 
   return {
     totalReturnPct: parseFloat(totalReturnPct.toFixed(2)),
@@ -123,6 +124,7 @@ function getPerformanceStats(bot) {
     bearReturnPct: parseFloat(bearReturnPct.toFixed(2)),
     maxDrawdownPct: parseFloat(maxDrawdownPct.toFixed(2)),
     sharpeRatio,
+    sortinoRatio,
     currentBalance: balance.current,
     startingBalance: STARTING_BALANCE,
     lastUpdated: new Date().toISOString(),
@@ -154,6 +156,34 @@ function calculateSharpe(trades) {
 
   const sharpe = (mean / stdDev) * Math.sqrt(365);
   return parseFloat(sharpe.toFixed(2));
+}
+
+/**
+ * Simplified daily Sortino with 0% risk-free rate.
+ * Only penalizes downside volatility.
+ */
+function calculateSortino(trades) {
+  if (trades.length === 0) return null;
+
+  const dailyReturns = new Map();
+  for (const t of trades) {
+    const day = new Date(t.exitTime).toDateString();
+    if (!dailyReturns.has(day)) dailyReturns.set(day, 0);
+    dailyReturns.set(day, dailyReturns.get(day) + t.pnlPct);
+  }
+
+  const days = Array.from(dailyReturns.values());
+  if (days.length < 7) return null;
+
+  const mean = days.reduce((a, b) => a + b, 0) / days.length;
+  const downsideSquares = days.filter(r => r < 0).map(r => r * r);
+  if (downsideSquares.length === 0) return mean > 0 ? 99 : null; // no losing days
+  const downsideDev = Math.sqrt(downsideSquares.reduce((a, b) => a + b, 0) / days.length);
+
+  if (downsideDev === 0) return null;
+
+  const sortino = (mean / downsideDev) * Math.sqrt(365);
+  return parseFloat(sortino.toFixed(2));
 }
 
 /**

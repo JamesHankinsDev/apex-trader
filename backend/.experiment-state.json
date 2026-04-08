@@ -2,5 +2,18 @@
   "startValue": 100,
   "wins": 6,
   "losses": 7,
-  "positions": {}
+  "positions": {
+    "BTC/USD": {
+      "symbol": "BTC/USD",
+      "entryPrice": 72050.91,
+      "qty": 0.000339299,
+      "notional": 24.44680171209,
+      "entryCost": 0.036670202568135,
+      "entryTime": "2026-04-08T13:36:50.042Z",
+      "orderId": null,
+      "livePrice": 71734.12,
+      "sma20": 72091.0243125,
+      "rsi": 22.616192225039086
+    }
+  }
 }
