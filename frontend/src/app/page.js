@@ -27,6 +27,7 @@ import ScalpBreakdown from "./components/ScalpBreakdown";
 import Holdings from "./components/Holdings";
 import PnlDistribution from "./components/PnlDistribution";
 import TradeHeatmap from "./components/TradeHeatmap";
+import LiveTraderBanner from "./components/LiveTraderBanner";
 import useTradeNotifications from "./components/useTradeNotifications";
 
 // ─── MAIN PAGE ───────────────────────────────────────────────
@@ -48,6 +49,7 @@ export default function Dashboard() {
   const [chartPeriod, setChartPeriod] = useState("1D");
   const [mobileSection, setMobileSection] = useState("dashboard");
   const [scalpLog, setScalpLog] = useState(null);
+  const [liveTrader, setLiveTrader] = useState(null);
 
   // ── Trade notifications ───────────────────────────────────
   const notifStatuses = useMemo(() => [
@@ -81,12 +83,16 @@ export default function Dashboard() {
   const fetchScalpLog = useCallback(async () => {
     try { const r = await fetch(`${API}/api/scalp-log`); if (r.ok) setScalpLog(await r.json()); } catch {}
   }, []);
+  const fetchLiveTrader = useCallback(async () => {
+    try { const r = await fetch(`${API}/api/live-trader/status`); if (r.ok) setLiveTrader(await r.json()); } catch {}
+  }, []);
 
   useEffect(() => { fetchStatus(); const id = setInterval(fetchStatus, 5000); return () => clearInterval(id); }, [fetchStatus]);
   useEffect(() => { fetchExpStatus(); const id = setInterval(fetchExpStatus, 5000); return () => clearInterval(id); }, [fetchExpStatus]);
   useEffect(() => { fetchExp2Status(); const id = setInterval(fetchExp2Status, 5000); return () => clearInterval(id); }, [fetchExp2Status]);
   useEffect(() => { fetchLeaderboard(); const id = setInterval(fetchLeaderboard, 60000); return () => clearInterval(id); }, [fetchLeaderboard]);
   useEffect(() => { fetchScalpLog(); const id = setInterval(fetchScalpLog, 30000); return () => clearInterval(id); }, [fetchScalpLog]);
+  useEffect(() => { fetchLiveTrader(); const id = setInterval(fetchLiveTrader, 10000); return () => clearInterval(id); }, [fetchLiveTrader]);
 
   // ── Sync config from backend ──────────────────────────────
   useEffect(() => {
@@ -152,6 +158,7 @@ export default function Dashboard() {
   return (
     <div style={{ position: "relative", zIndex: 1, paddingBottom: 90 }}>
       <Header running={running} mode={mode} setMode={setMode} clock={clock} onShowGuide={() => setShowGuide(true)} onShowDrawer={() => setShowDrawer(true)} />
+      <LiveTraderBanner liveTrader={liveTrader} />
       <Leaderboard leaderboard={leaderboard} statuses={[
         { key: "main", status },
         { key: "exp1", status: expStatus },

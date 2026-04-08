@@ -455,6 +455,13 @@
 }
 .mobileKpiSub { font-size: 12px; color: var(--dim); margin-top: 6px; font-family: var(--font-body); }
 
+/* ─── LIVE TRADER BANNER ────────────────────────────────── */
+.liveTraderBanner {
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  border-top: 2px solid;
+}
+
 /* Mobile hero (portfolio value) */
 .mobileHero {
   text-align: center; padding: 20px 16px 16px;
