@@ -58,7 +58,7 @@ export default function Holdings({ statuses }) {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
         <span className={styles.chartLabel} style={{ marginBottom: 0 }}>CURRENT HOLDINGS</span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--dim)" }}>
-          {allPositions.length} position{allPositions.length !== 1 ? "s" : ""} \u00B7 {fmt$(totalInvested)} invested \u00B7{" "}
+          {allPositions.length} position{allPositions.length !== 1 ? "s" : ""} {"\u00B7"} {fmt$(totalInvested)} invested {"\u00B7"}{" "}
           <span style={{ color: totalPnl >= 0 ? "var(--green)" : "var(--red)" }}>
             {totalPnl >= 0 ? "+" : ""}{fmt$(totalPnl)}
           </span>
@@ -104,8 +104,8 @@ export default function Holdings({ statuses }) {
 
               {/* Price + details */}
               <div style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "var(--dim)", lineHeight: 1.6 }}>
-                <span>Entry {fmt$(p.entryPrice)} \u2192 Now {fmt$(p.curPrice)}</span>
-                <span style={{ marginLeft: 10 }}>{fmt$(p.notional)} \u00B7 {formatHold(p.entryTime)}</span>
+                <span>Entry {fmt$(p.entryPrice)} {">"} Now {fmt$(p.curPrice)}</span>
+                <span style={{ marginLeft: 10 }}>{fmt$(p.notional)} | {formatHold(p.entryTime)}</span>
               </div>
 
               {/* P&L */}
