@@ -15,7 +15,8 @@ const WEIGHTS = {
 };
 
 // ─── Minimum thresholds to be eligible ───────────────────────
-const MIN_TRADES = 5;     // need at least 5 trades to be scored
+const MIN_TRADES = 100;   // need 100+ trades before live trader will adopt
+const REQUIRE_POSITIVE = true; // portfolio must be net positive to qualify
 const EVAL_INTERVAL_MS = 5 * 60 * 1000; // re-evaluate every 5 minutes
 
 // ─── State ───────────────────────────────────────────────────
@@ -40,13 +41,24 @@ function normalize(value, min, max) {
 function scoreBot(botKey) {
   const stats = getPerformanceStats(botKey);
 
-  // Eligibility check
+  // Eligibility: minimum trade count
   if (stats.totalTrades < MIN_TRADES) {
     return {
       score: 0,
       breakdown: {},
       eligible: false,
-      reason: `only ${stats.totalTrades} trades (need ${MIN_TRADES}+)`,
+      reason: `${stats.totalTrades}/${MIN_TRADES} trades — holding cash`,
+      stats,
+    };
+  }
+
+  // Eligibility: portfolio must be net positive
+  if (REQUIRE_POSITIVE && stats.totalReturnPct <= 0) {
+    return {
+      score: 0,
+      breakdown: {},
+      eligible: false,
+      reason: `portfolio ${stats.totalReturnPct.toFixed(1)}% — must be positive to qualify`,
       stats,
     };
   }
@@ -121,6 +133,8 @@ function evaluate() {
   if (winner && winner !== prevWinner) {
     const winnerLabel = { main: 'Exp 1', exp1: 'Exp 2', exp2: 'Exp 3' }[winner];
     console.log(`[EXPERIMENT_SCORER] New winner: ${winnerLabel} (score ${highestScore.toFixed(1)}) — live trader will mirror this strategy`);
+  } else if (!winner && prevWinner) {
+    console.log(`[EXPERIMENT_SCORER] No eligible winner — live trader holding cash (need ${MIN_TRADES}+ trades with positive portfolio)`);
   }
 
   lastEvaluation = {

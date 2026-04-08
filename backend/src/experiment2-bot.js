@@ -63,14 +63,14 @@ class Experiment2Bot {
   constructor() {
     this.running = false;
     this.config = {
-      // Credentials from env (secrets only)
-      apiKey: process.env.EXPERIMENT_2_ALPACA_API_KEY || '',
-      secretKey: process.env.EXPERIMENT_2_ALPACA_SECRET_KEY || '',
-      mode: 'paper',
+      // Credentials from env
+      apiKey: process.env.EXP3_ALPACA_API_KEY || '',
+      secretKey: process.env.EXP3_ALPACA_SECRET_KEY || '',
+      mode: 'paper', // experiments always paper trade
       // Watchlists from env
-      watchlist: (process.env.EXPERIMENT_2_WATCHLIST || 'AVAX/USD,LINK/USD,AAVE/USD,DOT/USD,UNI/USD').split(','),
-      bearWatchlist: process.env.EXPERIMENT_2_WATCHLIST_BEAR
-        ? process.env.EXPERIMENT_2_WATCHLIST_BEAR.split(',')
+      watchlist: (process.env.EXP3_WATCHLIST || 'AVAX/USD,LINK/USD,AAVE/USD,DOT/USD,UNI/USD').split(','),
+      bearWatchlist: process.env.EXP3_WATCHLIST_BEAR
+        ? process.env.EXP3_WATCHLIST_BEAR.split(',')
         : null,
       // Strategy constants (tuned in code)
       positionSize: 0.95,        // fallback if dynamic sizer not used

@@ -16,8 +16,8 @@ const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
  */
 async function evaluateBearEntry1(signals, regime, coin) {
   const symbol = coin || signals.symbol;
-  const apiKey = process.env.EXPERIMENT_1_ALPACA_API_KEY;
-  const secretKey = process.env.EXPERIMENT_1_ALPACA_SECRET_KEY;
+  const apiKey = process.env.EXP2_ALPACA_API_KEY;
+  const secretKey = process.env.EXP2_ALPACA_SECRET_KEY;
 
   if (!apiKey || !secretKey) {
     console.log(`[EXP1][BEAR] Missing API credentials — skipping ${symbol}`);

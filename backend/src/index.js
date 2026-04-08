@@ -48,12 +48,12 @@ async function getSharedMarketData() {
   }
 
   // Pick the first available API key (market data is account-independent)
-  const apiKey = bot.config.apiKey || process.env.ALPACA_API_KEY
-    || experimentBot.config.apiKey || process.env.EXPERIMENT_1_ALPACA_API_KEY
-    || experiment2Bot.config.apiKey || process.env.EXPERIMENT_2_ALPACA_API_KEY;
-  const secretKey = bot.config.secretKey || process.env.ALPACA_SECRET_KEY
-    || experimentBot.config.secretKey || process.env.EXPERIMENT_1_ALPACA_SECRET_KEY
-    || experiment2Bot.config.secretKey || process.env.EXPERIMENT_2_ALPACA_SECRET_KEY;
+  const apiKey = bot.config.apiKey || process.env.EXP1_ALPACA_API_KEY
+    || experimentBot.config.apiKey || process.env.EXP2_ALPACA_API_KEY
+    || experiment2Bot.config.apiKey || process.env.EXP3_ALPACA_API_KEY;
+  const secretKey = bot.config.secretKey || process.env.EXP1_ALPACA_SECRET_KEY
+    || experimentBot.config.secretKey || process.env.EXP2_ALPACA_SECRET_KEY
+    || experiment2Bot.config.secretKey || process.env.EXP3_ALPACA_SECRET_KEY;
   const streamHandle = bot.streamHandle || experimentBot.streamHandle || experiment2Bot.streamHandle;
 
   if (!apiKey || !secretKey) return null;
@@ -285,32 +285,31 @@ app.get('/api/scalp-log', (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`\n🚀 APEX TRADER backend running on port ${PORT}`);
-  console.log(`   Mode: ${process.env.ALPACA_MODE || 'paper'}`);
+  console.log(`   Experiments: paper | Live trader: ${process.env.LIVE_TRADER_ENABLED === 'true' ? 'LIVE' : 'disabled'}`);
   console.log(`   Health: http://localhost:${PORT}/health`);
   console.log(`   Status: http://localhost:${PORT}/api/status\n`);
 
-  // Auto-start if credentials are set in env
-  if (process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
-    console.log('📡 Auto-starting bot from environment credentials...');
-    bot.start().then(r => console.log('   Bot start:', r.msg));
+  // Auto-start Experiment 1 (Momentum)
+  if (process.env.EXP1_ALPACA_API_KEY && process.env.EXP1_ALPACA_SECRET_KEY) {
+    console.log('🧪 Auto-starting Experiment 1 (Momentum)...');
+    bot.start().then(r => console.log('   Exp 1:', r.msg));
   }
 
-  // Auto-start experiment 1 bot if credentials are set
-  if (process.env.EXPERIMENT_1_ALPACA_API_KEY && process.env.EXPERIMENT_1_ALPACA_SECRET_KEY) {
-    console.log('🧪 Auto-starting experiment 1 bot...');
-    experimentBot.start().then(r => console.log('   Experiment 1 start:', r.msg));
+  // Auto-start Experiment 2 (Scalping)
+  if (process.env.EXP2_ALPACA_API_KEY && process.env.EXP2_ALPACA_SECRET_KEY) {
+    console.log('🧪 Auto-starting Experiment 2 (Scalping)...');
+    experimentBot.start().then(r => console.log('   Exp 2:', r.msg));
   }
 
-  // Auto-start experiment 2 bot if credentials are set
-  if (process.env.EXPERIMENT_2_ALPACA_API_KEY && process.env.EXPERIMENT_2_ALPACA_SECRET_KEY) {
-    console.log('🧪 Auto-starting experiment 2 bot (Momentum Breakout)...');
-    experiment2Bot.start().then(r => console.log('   Experiment 2 start:', r.msg));
+  // Auto-start Experiment 3 (Breakout)
+  if (process.env.EXP3_ALPACA_API_KEY && process.env.EXP3_ALPACA_SECRET_KEY) {
+    console.log('🧪 Auto-starting Experiment 3 (Breakout)...');
+    experiment2Bot.start().then(r => console.log('   Exp 3:', r.msg));
   }
 
-  // Auto-start live trader if enabled and credentials are set
+  // Auto-start live trader if enabled
   if (process.env.LIVE_TRADER_ENABLED === 'true' && process.env.LIVE_TRADER_API_KEY) {
-    console.log('🏆 Auto-starting live trader (mirrors winning experiment)...');
-    // Delay slightly to let experiments initialize first
+    console.log('🏆 Auto-starting Live Trader (mirrors winning experiment)...');
     setTimeout(() => {
       liveTrader.start({ main: bot, exp1: experimentBot, exp2: experiment2Bot })
         .then(r => console.log('   Live trader:', r.msg));

@@ -75,14 +75,14 @@ class TradingBot {
   constructor() {
     this.running = false;
     this.config = {
-      // Credentials from env (secrets only)
-      apiKey: process.env.ALPACA_API_KEY || '',
-      secretKey: process.env.ALPACA_SECRET_KEY || '',
-      mode: process.env.ALPACA_MODE || 'paper',
+      // Credentials from env
+      apiKey: process.env.EXP1_ALPACA_API_KEY || '',
+      secretKey: process.env.EXP1_ALPACA_SECRET_KEY || '',
+      mode: 'paper', // experiments always paper trade
       // Watchlists from env
-      watchlist: (process.env.WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD,DOGE/USD,AVAX/USD').split(','),
-      bearWatchlist: process.env.WATCHLIST_BEAR
-        ? process.env.WATCHLIST_BEAR.split(',')
+      watchlist: (process.env.EXP1_WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD,DOGE/USD,AVAX/USD').split(','),
+      bearWatchlist: process.env.EXP1_WATCHLIST_BEAR
+        ? process.env.EXP1_WATCHLIST_BEAR.split(',')
         : null,
       // Strategy constants (tuned in code)
       stopLoss: 0.05,

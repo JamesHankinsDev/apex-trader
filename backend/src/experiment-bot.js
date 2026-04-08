@@ -56,14 +56,14 @@ class ExperimentBot {
   constructor() {
     this.running = false;
     this.config = {
-      // Credentials from env (secrets only)
-      apiKey: process.env.EXPERIMENT_1_ALPACA_API_KEY || '',
-      secretKey: process.env.EXPERIMENT_1_ALPACA_SECRET_KEY || '',
-      mode: 'paper',
+      // Credentials from env
+      apiKey: process.env.EXP2_ALPACA_API_KEY || '',
+      secretKey: process.env.EXP2_ALPACA_SECRET_KEY || '',
+      mode: 'paper', // experiments always paper trade
       // Watchlists from env
-      watchlist: (process.env.EXPERIMENT_1_WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD').split(','),
-      bearWatchlist: process.env.EXPERIMENT_1_WATCHLIST_BEAR
-        ? process.env.EXPERIMENT_1_WATCHLIST_BEAR.split(',')
+      watchlist: (process.env.EXP2_WATCHLIST || 'BTC/USD,ETH/USD,SOL/USD').split(','),
+      bearWatchlist: process.env.EXP2_WATCHLIST_BEAR
+        ? process.env.EXP2_WATCHLIST_BEAR.split(',')
         : null,
       // Strategy constants (tuned in code)
       maxPositions: 2,

@@ -14,7 +14,7 @@ class LiveTrader {
     this.config = {
       apiKey: process.env.LIVE_TRADER_API_KEY || '',
       secretKey: process.env.LIVE_TRADER_SECRET_KEY || '',
-      mode: process.env.LIVE_TRADER_MODE || 'paper', // default paper for safety
+      mode: 'live', // live trader always uses real money
     };
     this.running = false;
     this.mirrorTimer = null;
@@ -81,8 +81,12 @@ class LiveTrader {
     const winner = evaluation.winner;
 
     if (!winner) {
-      this.state.mirrorSource = null;
-      return; // no eligible winner yet
+      if (this.mirroredFrom) {
+        this.addEvent('info', '[MIRROR] No eligible winner — holding cash. Experiments need 100+ trades with positive returns.');
+      }
+      this.state.mirrorSource = { label: 'Holding Cash', reason: 'No experiment qualifies yet' };
+      this.mirroredFrom = null;
+      return;
     }
 
     // Detect winner change
