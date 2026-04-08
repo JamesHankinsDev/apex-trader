@@ -2,21 +2,6 @@
   "startValue": 100,
   "wins": 2,
   "losses": 2,
-  "positions": {
-    "SOL/USD": {
-      "symbol": "SOL/USD",
-      "entryPrice": 81.702,
-      "qty": 1.046786704,
-      "notional": 85.524567290208,
-      "entryCost": 0.128286850935312,
-      "entryTime": "2026-04-06T03:34:17.844Z",
-      "highWaterMark": 86.4013,
-      "trailingStop": 73.44110500000001,
-      "hardStop": 65.3616,
-      "takeProfit": 118.4679,
-      "orderId": null,
-      "livePrice": 84.5642
-    }
-  },
+  "positions": {},
   "cooldowns": {}
 }

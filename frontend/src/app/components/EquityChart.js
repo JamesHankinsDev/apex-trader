@@ -33,6 +33,9 @@ export default function EquityChart({ data, startValue, equalHistory, mcapHistor
       chartRef.current = null;
     }
 
+    const isMobileChart = container.clientWidth < 500;
+    const periodCfg = PERIODS[period] || PERIODS["1D"];
+
     const chart = createChart(container, {
       width: container.clientWidth,
       height: Math.max(220, container.clientHeight || 280),
@@ -76,9 +79,6 @@ export default function EquityChart({ data, startValue, equalHistory, mcapHistor
     const lineColor = isUp ? "#00ff88" : "#ff3355";
     const areaTopColor = isUp ? "rgba(0,255,136,0.2)" : "rgba(255,51,85,0.2)";
     const areaBottomColor = "rgba(0,0,0,0)";
-
-    const isMobileChart = container.clientWidth < 500;
-    const periodCfg = PERIODS[period] || PERIODS["1D"];
 
     // Portfolio area series (v5 API: chart.addSeries(AreaSeries, options))
     const portfolioSeries = chart.addSeries(AreaSeries, {

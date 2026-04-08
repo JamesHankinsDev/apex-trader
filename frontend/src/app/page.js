@@ -30,6 +30,22 @@ import TradeHeatmap from "./components/TradeHeatmap";
 import LiveTraderBanner from "./components/LiveTraderBanner";
 import useTradeNotifications from "./components/useTradeNotifications";
 
+// ─── Quiet mode: detect if anything actionable is happening ──
+function useQuietMode(botStatus) {
+  return useMemo(() => {
+    if (!botStatus) return true;
+    const signals = botStatus.signals || [];
+    const positions = botStatus.positions || {};
+    const hasHotSignal = signals.some(s => s.score >= 70 || s.signal === "buy");
+    const hasOpenPositions = Object.keys(positions).length > 0;
+    const recentEvents = (botStatus.events || []).filter(e => {
+      const age = Date.now() - new Date(e.time).getTime();
+      return age < 120000 && (e.type === "success" || e.type === "danger");
+    });
+    return !hasHotSignal && !hasOpenPositions && recentEvents.length === 0;
+  }, [botStatus]);
+}
+
 // ─── MAIN PAGE ───────────────────────────────────────────────
 export default function Dashboard() {
   // ── State ─────────────────────────────────────────────────
@@ -226,22 +242,6 @@ export default function Dashboard() {
       <BottomNav activeSection={mobileSection} setActiveSection={setMobileSection} activeBot={activeTab} setActiveBot={setActiveTab} />
     </div>
   );
-}
-
-// ─── Quiet mode: detect if anything actionable is happening ──
-function useQuietMode(botStatus) {
-  return useMemo(() => {
-    if (!botStatus) return true;
-    const signals = botStatus.signals || [];
-    const positions = botStatus.positions || {};
-    const hasHotSignal = signals.some(s => s.score >= 70 || s.signal === "buy");
-    const hasOpenPositions = Object.keys(positions).length > 0;
-    const recentEvents = (botStatus.events || []).filter(e => {
-      const age = Date.now() - new Date(e.time).getTime();
-      return age < 120000 && (e.type === "success" || e.type === "danger");
-    });
-    return !hasHotSignal && !hasOpenPositions && recentEvents.length === 0;
-  }, [botStatus]);
 }
 
 // ─── BotTabContent — 2-column layout: signals | chart+trades ─
