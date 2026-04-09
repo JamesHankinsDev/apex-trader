@@ -10,14 +10,21 @@ const { evaluateBearEntry1 } = require('./bearStrategy1');
 const { setBearCooldown } = require('./bearStrategy');
 const { recordTrade: recordPerfTrade, updateBalance } = require('./performance');
 const scalp = require('./scalpEngine');
+const { evaluateHigherTimeframe } = require('./strategy');
 const { recordScalpTrade, recordFeatureSnapshot, isCoinDisabled } = require('./scalpLog');
 const sizer = require('./positionSizer');
+const { computeRiskMetrics } = require('./riskMetrics');
 const BenchmarkTracker = require('./benchmark');
 const benchmark = new BenchmarkTracker();
 
 const STATE_FILE = path.join(__dirname, '..', '.experiment-state.json');
 const SPREAD_COST_PCT = 0.0015;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const SCALP_ENTRY_COOLDOWN_MS = 30 * 60 * 1000; // 30 min between scalp entries per coin
+
+// HTF cache: skip scalp entries when 1h trend is bearish (5-min TTL per symbol)
+const htfCache = new Map(); // symbol -> { confirmed, fetchedAt }
+const HTF_CACHE_TTL = 5 * 60 * 1000;
 
 function loadState() {
   try {
@@ -536,6 +543,34 @@ class ExperimentBot {
             continue;
           }
 
+          // Cooldown: don't re-enter same coin within 30 min
+          const lastEntry = Object.values(this.state.positions)
+            .filter(p => p.symbol === sig.symbol)
+            .map(p => new Date(p.entryTime).getTime())[0];
+          if (lastEntry && (Date.now() - lastEntry) < SCALP_ENTRY_COOLDOWN_MS) continue;
+
+          // HTF gate: skip if 1h trend is bearish (cached 5 min per symbol)
+          const cached = htfCache.get(sig.symbol);
+          if (cached && (Date.now() - cached.fetchedAt) < HTF_CACHE_TTL) {
+            if (!cached.confirmed) {
+              console.log(`[EXP1][SCALP] Skipping ${sig.symbol} — HTF bearish (cached)`);
+              continue;
+            }
+          } else {
+            try {
+              const htfBars = await alpaca.getCryptoBars(this.config.apiKey, this.config.secretKey, sig.symbol, '1Hour', 30);
+              const htf = evaluateHigherTimeframe(htfBars);
+              htfCache.set(sig.symbol, { confirmed: htf.confirmed, fetchedAt: Date.now() });
+              if (!htf.confirmed) {
+                console.log(`[EXP1][SCALP] Skipping ${sig.symbol} — HTF ${htf.bias}`);
+                continue;
+              }
+            } catch {
+              // Fail-safe: skip entry if HTF check fails
+              continue;
+            }
+          }
+
           const scalpConf = sizer.scoreScalp({ smaDipPct: sig.smaDip, rsi: sig.rsi });
           const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
           const scalpSize = sizer.calculateSize({
@@ -826,6 +861,7 @@ class ExperimentBot {
       lastBearSignal: this.state.lastBearSignal,
       events: this.state.events,
       benchmarks: benchmark.getStatus(),
+      riskMetrics: computeRiskMetrics(this.state.trades, this.state.equityHistory),
     };
   }
 }

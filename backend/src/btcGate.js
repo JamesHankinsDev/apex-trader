@@ -140,7 +140,9 @@ async function isBtcGateOpen(apiKey, secretKey, streamHandle) {
     }
 
     const closes = bars.map(b => b.c);
-    const sma50 = closes.reduce((a, b) => a + b, 0) / closes.length;
+    // Use exactly the last 50 closes for a proper 50-day SMA
+    const sma50Closes = closes.slice(-50);
+    const sma50 = sma50Closes.reduce((a, b) => a + b, 0) / sma50Closes.length;
 
     // Get current BTC price (stream first, REST fallback)
     const livePrice = await alpaca.getLatestCryptoPrice(apiKey, secretKey, 'BTC/USD', streamHandle);
@@ -258,7 +260,8 @@ async function getDetailedRegime(apiKey, secretKey, streamHandle) {
 
   const closes = bars.map(b => b.c);
   const latestPrice = cache.result.btcPrice || closes[closes.length - 1];
-  const sma50 = cache.result.sma50 || (closes.reduce((a, b) => a + b, 0) / closes.length);
+  const sma50Slice = closes.slice(-50);
+  const sma50 = cache.result.sma50 || (sma50Slice.reduce((a, b) => a + b, 0) / sma50Slice.length);
   const sma5 = calcSMA(closes, 5);
   const sma20 = calcSMA(closes, 20);
   const rsi = calcRSI(closes);

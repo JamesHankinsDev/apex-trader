@@ -17,24 +17,24 @@ const SPREAD_PER_SIDE = {
 
 // Minimum net expected profit after spread costs (as a fraction).
 // If expected reversion gain minus round-trip spread < this, skip the entry.
-const MIN_NET_PROFIT = 0.0015; // 0.15% — must clear this after fees to be worth it
+const MIN_NET_PROFIT = 0.003; // 0.3% — must clear this after fees to be worth it
 
 // ─── Default parameters (altcoin scalps) ─────────────────────
 const DEFAULTS = {
   smaPeriod: 20,
   rsiPeriod: 14,
-  dipPct: 0.004,           // entry: price < SMA * (1 - 0.4%)
-  rsiThreshold: 45,        // entry: RSI < 45
-  stopLoss: 0.0065,        // exit: 0.65% stop loss
-  maxHoldMs: 20 * 60 * 1000, // exit: 20 minutes
+  dipPct: 0.008,           // entry: price < SMA * (1 - 0.8%) — deeper dip = better R:R
+  rsiThreshold: 40,        // entry: RSI < 40 — require stronger oversold signal
+  stopLoss: 0.015,         // exit: 1.5% stop loss — room for noise before SMA reversion
+  maxHoldMs: 30 * 60 * 1000, // exit: 30 minutes — more time to revert
 };
 
 // ─── BTC-specific overrides (tighter for lower volatility) ───
 const BTC_OVERRIDES = {
-  dipPct: 0.0025,          // price < SMA * (1 - 0.25%)
-  rsiThreshold: 42,        // RSI < 42
-  stopLoss: 0.004,         // 0.4% stop loss
-  maxHoldMs: 15 * 60 * 1000, // 15 minutes
+  dipPct: 0.005,           // price < SMA * (1 - 0.5%) — deeper dip for BTC
+  rsiThreshold: 38,        // RSI < 38 — stricter for BTC
+  stopLoss: 0.01,          // 1.0% stop loss — room for BTC noise
+  maxHoldMs: 25 * 60 * 1000, // 25 minutes
 };
 
 /**
@@ -158,8 +158,11 @@ function evalExit(pos, price, sma, opts = {}) {
   const pnlPct = ((price - pos.entryPrice) / pos.entryPrice * 100);
   const pnlTag = `P&L ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%`;
 
-  // (1) SMA target — price reverted to mean
-  if (price >= sma) {
+  // (1) SMA target — price reverted to mean, but only exit if net profitable
+  // Require price to cover entry + round-trip spread before taking profit
+  const spreadCost = getSpreadForSymbol(opts.symbol) * 2;
+  const minProfitPrice = pos.entryPrice * (1 + spreadCost + MIN_NET_PROFIT);
+  if (price >= sma && price >= minProfitPrice) {
     return {
       reason: `${label} TARGET HIT — price $${price.toFixed(4)} >= SMA $${sma.toFixed(4)} | ${holdMin}min | ${pnlTag}`,
       tag: 'targetHit',

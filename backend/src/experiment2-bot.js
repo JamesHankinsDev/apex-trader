@@ -5,8 +5,10 @@ const path = require('path');
 const alpaca = require('./alpaca');
 const { evaluate } = require('./breakout-strategy');
 const scalp = require('./scalpEngine');
+const { evaluateHigherTimeframe } = require('./strategy');
 const { recordScalpTrade, recordFeatureSnapshot, isCoinDisabled } = require('./scalpLog');
 const sizer = require('./positionSizer');
+const { computeRiskMetrics } = require('./riskMetrics');
 const cryptoStream = require('./crypto-stream');
 const { isBtcGateOpen, getMarketRegime, getDetailedRegime } = require('./btcGate');
 const { evaluateBearEntry2, addTranche, checkTrancheExit, clearTranches, getBtcAccumulationStatus } = require('./bearStrategy2');
@@ -20,10 +22,15 @@ const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const EIGHTY_BARS_4H_MS = 80 * FOUR_HOURS_MS; // ~13 days for 50+ bars of 4h data
 
 // Scalp config — bot-specific overrides (shared defaults come from scalpEngine)
-const HIGH_PRIORITY_SCALP = new Set(['LINK/USD', 'AVAX/USD']); // most liquid, RSI < 45
-// AAVE, DOT, UNI: RSI < 40 (stricter to account for wider spreads)
+const HIGH_PRIORITY_SCALP = new Set(['LINK/USD', 'AVAX/USD']); // most liquid alts
+// All coins now use uniform RSI < 40 threshold from scalpEngine defaults
 const BTC_SCALP_MIN_GAP_MS = 60 * 60 * 1000;  // next tranche must be >60min away
 const TRANCHE_SPACING_MS = 12 * 60 * 60 * 1000; // 12h between tranches
+const BREAKOUT_ENTRY_COOLDOWN_MS = 30 * 60 * 1000; // 30 min between breakout entries
+
+// HTF cache: skip entries when 1h trend is bearish (5-min TTL per symbol)
+const htfCache = new Map();
+const HTF_CACHE_TTL = 5 * 60 * 1000;
 
 function loadState() {
   try {
@@ -611,6 +618,37 @@ class Experiment2Bot {
             continue;
           }
 
+          // Breakout entry cooldown: don't stack entries within 30 min
+          const lastBreakoutEntry = Object.values(this.state.positions)
+            .filter(p => !p.scalpMode && !p.bearMode)
+            .map(p => new Date(p.entryTime).getTime())
+            .sort((a, b) => b - a)[0];
+          if (lastBreakoutEntry && (Date.now() - lastBreakoutEntry) < BREAKOUT_ENTRY_COOLDOWN_MS) {
+            this.addEvent('info', `Skipping ${sig.symbol} — breakout cooldown (${((BREAKOUT_ENTRY_COOLDOWN_MS - (Date.now() - lastBreakoutEntry)) / 60000).toFixed(0)}min remaining)`);
+            break;
+          }
+
+          // HTF confirmation: skip breakout if 1h trend is bearish
+          const cached = htfCache.get(sig.symbol);
+          if (cached && (Date.now() - cached.fetchedAt) < HTF_CACHE_TTL) {
+            if (!cached.confirmed) {
+              this.addEvent('info', `Skipping ${sig.symbol} — HTF bearish (cached)`);
+              continue;
+            }
+          } else {
+            try {
+              const htfBars = await alpaca.getCryptoBars(this.config.apiKey, this.config.secretKey, sig.symbol, '1Hour', 30);
+              const htf = evaluateHigherTimeframe(htfBars);
+              htfCache.set(sig.symbol, { confirmed: htf.confirmed, fetchedAt: Date.now() });
+              if (!htf.confirmed) {
+                this.addEvent('info', `Skipping ${sig.symbol} — HTF ${htf.bias}`);
+                continue;
+              }
+            } catch {
+              continue; // Fail-safe: skip entry if HTF check fails
+            }
+          }
+
           const breakoutConf = sizer.scoreBreakout({
             volumeRatio: sig.volumeRatio || 1.5,
             rsi: sig.rsi || 60,
@@ -656,13 +694,12 @@ class Experiment2Bot {
 
         const closes = minBars.map(b => b.c);
         const { sma: sma20, rsi: rsi14 } = scalp.computeIndicators(closes, sig.price);
-        const rsiThreshold = HIGH_PRIORITY_SCALP.has(sig.symbol) ? 45 : 40;
-        const { shouldEnter, smaDip, spreadBlocked, expectedNet } = scalp.evalEntry(sig.price, sma20, rsi14, { rsiThreshold, symbol: sig.symbol });
+        const { shouldEnter, smaDip, spreadBlocked, expectedNet } = scalp.evalEntry(sig.price, sma20, rsi14, { symbol: sig.symbol });
 
         if (spreadBlocked) {
           console.log(`[EXP2][SCALP] Skipping ${sig.symbol} — spread filter: expected net ${expectedNet}%`);
         } else if (shouldEnter) {
-          const scalpConf = sizer.scoreScalp({ smaDipPct: parseFloat(smaDip), rsi: rsi14, rsiThreshold, expectedNetPct: parseFloat(expectedNet || '0') });
+          const scalpConf = sizer.scoreScalp({ smaDipPct: parseFloat(smaDip), rsi: rsi14, expectedNetPct: parseFloat(expectedNet || '0') });
           const currentExposure = Object.values(this.state.positions).reduce((s, p) => s + (p.notional || 0), 0);
           const scalpSize = sizer.calculateSize({
             confidence: scalpConf,
@@ -1190,6 +1227,7 @@ class Experiment2Bot {
       cooldowns: this.state.cooldowns,
       btcAccumulation: getBtcAccumulationStatus(),
       benchmarks: benchmark.getStatus(),
+      riskMetrics: computeRiskMetrics(this.state.trades, this.state.equityHistory),
     };
   }
 }

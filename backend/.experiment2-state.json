@@ -1,19 +1,7 @@
 {
   "startValue": 100,
-  "wins": 2,
-  "losses": 2,
-  "positions": {
-    "LINK/USD": {
-      "symbol": "LINK/USD",
-      "orderId": "8c758c7b-0075-4b99-8c6c-5f9daab8f286",
-      "entryPrice": 9.1221,
-      "qty": 5.461549919,
-      "notional": 27.43,
-      "entryCost": 0.041145,
-      "entryTime": "2026-04-08T14:10:05.823Z",
-      "scalpMode": true,
-      "livePrice": 9.095
-    }
-  },
+  "wins": 0,
+  "losses": 0,
+  "positions": {},
   "cooldowns": {}
 }

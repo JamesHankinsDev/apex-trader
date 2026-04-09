@@ -85,9 +85,13 @@ function evaluateSignal(symbol, bars, params) {
   let score = 50;
   const reasons = [];
 
+  // Track how many bullish signals confirm (need >= 2 for entry)
+  let confirmations = 0;
+
   // RSI signal (strongest weight)
   if (rsi < rsiBuy) {
     score += 25;
+    confirmations++;
     reasons.push(`RSI ${rsi.toFixed(1)} — oversold`);
   } else if (rsi < rsiBuy + 10) {
     score += 10;
@@ -100,24 +104,28 @@ function evaluateSignal(symbol, bars, params) {
   // Trend: SMA crossover
   if (sma5 > sma20) {
     score += 10;
+    confirmations++;
     reasons.push('SMA5 > SMA20 (uptrend)');
   } else {
-    score -= 10;
+    score -= 15;
     reasons.push('SMA5 < SMA20 (downtrend)');
   }
 
   // Volume spike
   if (volumeRatio > 2.0) {
     score += 15;
-    reasons.push(`Volume ×${volumeRatio.toFixed(1)} (strong spike)`);
+    confirmations++;
+    reasons.push(`Volume x${volumeRatio.toFixed(1)} (strong spike)`);
   } else if (volumeRatio > 1.5) {
     score += 8;
-    reasons.push(`Volume ×${volumeRatio.toFixed(1)} (above avg)`);
+    confirmations++;
+    reasons.push(`Volume x${volumeRatio.toFixed(1)} (above avg)`);
   }
 
   // Momentum
   if (momentum > 2) {
     score += 12;
+    confirmations++;
     reasons.push(`+${momentum.toFixed(2)}% momentum`);
   } else if (momentum > 0.5) {
     score += 5;
@@ -130,6 +138,13 @@ function evaluateSignal(symbol, bars, params) {
   if (atrPct > 2) {
     score += 5;
     reasons.push(`High volatility (ATR ${atrPct.toFixed(1)}%)`);
+  }
+
+  // Multi-signal gate: require at least 2 confirmations to reach entry threshold
+  // Without 2+ signals agreeing, cap score below entry threshold
+  if (confirmations < 2) {
+    score = Math.min(score, 60);
+    reasons.push(`Only ${confirmations} confirmation(s) — capped`);
   }
 
   return {
@@ -162,36 +177,39 @@ function evaluateHigherTimeframe(bars) {
   const reasons = [];
   let score = 0;
 
-  // HTF trend direction (SMA alignment)
+  // HTF trend direction (SMA alignment) — strongest signal
   if (sma5 > sma20) {
-    score += 1;
+    score += 2;
     reasons.push('HTF uptrend (SMA5 > SMA20)');
   } else {
-    score -= 1;
+    score -= 2;
     reasons.push('HTF downtrend (SMA5 < SMA20)');
   }
 
   // HTF RSI — block entry if overbought on higher timeframe
-  if (rsi > 75) {
+  if (rsi > 70) {
     score -= 2;
     reasons.push(`HTF RSI ${rsi.toFixed(1)} — overbought`);
+  } else if (rsi > 60) {
+    score -= 1;
+    reasons.push(`HTF RSI ${rsi.toFixed(1)} — elevated`);
   } else if (rsi < 30) {
     score += 1;
     reasons.push(`HTF RSI ${rsi.toFixed(1)} — oversold`);
   }
 
-  // HTF momentum
-  if (momentum > 0.5) {
+  // HTF momentum — negative momentum is a strong rejection signal
+  if (momentum > 1.0) {
     score += 1;
     reasons.push(`HTF momentum +${momentum.toFixed(2)}%`);
-  } else if (momentum < -1) {
-    score -= 1;
-    reasons.push(`HTF momentum ${momentum.toFixed(2)}%`);
+  } else if (momentum < -0.5) {
+    score -= 2;
+    reasons.push(`HTF momentum ${momentum.toFixed(2)}% (declining)`);
   }
 
   const bias = score > 0 ? 'bullish' : score < 0 ? 'bearish' : 'neutral';
-  // Confirmed if not bearish (allow neutral + bullish)
-  const confirmed = score >= 0;
+  // Require positive score — neutral no longer passes
+  const confirmed = score > 0;
 
   return { confirmed, bias, reasons };
 }

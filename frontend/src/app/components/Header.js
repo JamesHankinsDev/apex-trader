@@ -1,7 +1,7 @@
 import styles from "../page.module.css";
 import NotificationToggle from "./NotificationToggle";
 
-export default function Header({ running, mode, setMode, clock, onShowGuide, onShowDrawer }) {
+export default function Header({ running, mode, setMode, clock, onShowGuide, onShowDrawer, onShowExpectations }) {
   return (
     <header className={styles.header}>
       <div className={styles.logo}>
@@ -32,6 +32,9 @@ export default function Header({ running, mode, setMode, clock, onShowGuide, onS
             LIVE
           </button>
         </div>
+        <button className={styles.guideBtn} onClick={onShowExpectations}>
+          EXPECTATIONS
+        </button>
         <button className={styles.guideBtn} onClick={onShowGuide}>
           ? GUIDE
         </button>

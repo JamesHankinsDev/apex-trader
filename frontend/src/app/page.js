@@ -29,6 +29,7 @@ import PnlDistribution from "./components/PnlDistribution";
 import TradeHeatmap from "./components/TradeHeatmap";
 import LiveTraderBanner from "./components/LiveTraderBanner";
 import useTradeNotifications from "./components/useTradeNotifications";
+import Expectations from "./components/Expectations";
 
 // ─── Quiet mode: detect if anything actionable is happening ──
 function useQuietMode(botStatus) {
@@ -166,9 +167,7 @@ function BotTabContent({ botType, botStatus, config, running, connecting, onStar
 
                 <BenchmarkBar benchmarks={bm} portfolioValue={pv} startValue={sv} />
 
-                {botType === "main" && (
-                  <RiskMetrics riskMetrics={bs?.riskMetrics} wins={bs?.wins || 0} losses={bs?.losses || 0} />
-                )}
+                <RiskMetrics riskMetrics={bs?.riskMetrics} wins={bs?.wins || 0} losses={bs?.losses || 0} />
               </>
             )}
 
@@ -208,6 +207,7 @@ export default function Dashboard() {
   const [clock, setClock] = useState("");
   const [mode, setMode] = useState("paper");
   const [showGuide, setShowGuide] = useState(false);
+  const [showExpectations, setShowExpectations] = useState(false);
   const [showDrawer, setShowDrawer] = useState(false);
   const [config, setConfig] = useState(null);
   const [activeTab, setActiveTab] = useState("main");
@@ -327,7 +327,7 @@ export default function Dashboard() {
 
   return (
     <div style={{ position: "relative", zIndex: 1, paddingBottom: 90 }}>
-      <Header running={running} mode={mode} setMode={setMode} clock={clock} onShowGuide={() => setShowGuide(true)} onShowDrawer={() => setShowDrawer(true)} />
+      <Header running={running} mode={mode} setMode={setMode} clock={clock} onShowGuide={() => setShowGuide(true)} onShowDrawer={() => setShowDrawer(true)} onShowExpectations={() => setShowExpectations(true)} />
       <LiveTraderBanner liveTrader={liveTrader} />
       <Leaderboard leaderboard={leaderboard} statuses={[
         { key: "main", status },
@@ -377,6 +377,16 @@ export default function Dashboard() {
       </Drawer>
 
       {showGuide && <StrategyGuide onClose={() => setShowGuide(false)} />}
+      {showExpectations && (
+        <Expectations
+          onClose={() => setShowExpectations(false)}
+          statuses={[
+            { key: "main", status },
+            { key: "exp1", status: expStatus },
+            { key: "exp2", status: exp2Status },
+          ]}
+        />
+      )}
 
       <div className={styles.disclaimer}>
         {"\u26A0"}{" "}

@@ -32,7 +32,7 @@ export default function StrategyGuide({ onClose }) {
               <div className={styles.guideRow}><span>RSI slightly below buy threshold</span><span className={styles.guideGreen}>+10 pts</span></div>
               <div className={styles.guideRow}><span>RSI above sell threshold</span><span className={styles.guideRed}>-30 pts</span></div>
               <div className={styles.guideRow}><span>SMA5 above SMA20 (uptrend)</span><span className={styles.guideGreen}>+10 pts</span></div>
-              <div className={styles.guideRow}><span>SMA5 below SMA20 (downtrend)</span><span className={styles.guideRed}>-10 pts</span></div>
+              <div className={styles.guideRow}><span>SMA5 below SMA20 (downtrend)</span><span className={styles.guideRed}>-15 pts</span></div>
               <div className={styles.guideRow}><span>Volume spike (&gt;2x average)</span><span className={styles.guideGreen}>+15 pts</span></div>
               <div className={styles.guideRow}><span>Volume above average (1.5-2x)</span><span className={styles.guideGreen}>+8 pts</span></div>
               <div className={styles.guideRow}><span>Strong momentum (&gt;2%)</span><span className={styles.guideGreen}>+12 pts</span></div>
@@ -40,7 +40,12 @@ export default function StrategyGuide({ onClose }) {
               <div className={styles.guideRow}><span>Negative momentum (&lt;-3%)</span><span className={styles.guideRed}>-15 pts</span></div>
               <div className={styles.guideRow}><span>High volatility (ATR &gt;2%)</span><span className={styles.guideGreen}>+5 pts</span></div>
             </div>
-            <p>The highest-scoring asset is then checked against the <strong>1-hour timeframe</strong> for trend confirmation. If the higher timeframe is bearish, the entry is skipped.</p>
+            <p>
+              <strong>Multi-signal gate:</strong> At least 2 of the above bullish signals must confirm (RSI oversold,
+              uptrend, volume spike, or strong momentum) or the score is capped at 60 — below entry threshold.
+              The highest-scoring asset is then checked against the <strong>1-hour timeframe</strong> for trend confirmation.
+              If the higher timeframe is bearish or neutral, the entry is skipped.
+            </p>
           </section>
 
           <section className={styles.guideSection}>
