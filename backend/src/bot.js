@@ -40,6 +40,7 @@ function savePersistedState(state) {
       wins: state.wins,
       losses: state.losses,
       trades: state.trades,
+      equityHistory: state.equityHistory,
       positions: serializablePositions,
     }, null, 2));
   } catch {}
@@ -110,8 +111,8 @@ class TradingBot {
         }])
       ),
       signals: [],        // latest signals
-      trades: [],         // populated from Alpaca activity history on start
-      equityHistory: [],  // [{t, v}] for chart
+      trades: saved.trades || [],
+      equityHistory: saved.equityHistory || [],
       wins: 0,
       losses: 0,
       startValue: saved.startValue || 0,
@@ -202,8 +203,22 @@ class TradingBot {
       this.addEvent('success', `Bot started in ${this.config.mode.toUpperCase()} mode`);
       this.addEvent('info', `Portfolio: $${this.state.portfolioValue.toFixed(2)}`);
 
-      // Load trade history from Alpaca activities
-      await this.syncTradeHistory();
+      // Load trade history from Alpaca only if we have no persisted trades.
+      // Persisted trades have accurate net P&L; Alpaca rebuild uses gross P&L.
+      if (this.state.trades.length === 0) {
+        await this.syncTradeHistory();
+      } else {
+        // Recount wins/losses from persisted trades
+        let wins = 0, losses = 0;
+        for (const t of this.state.trades) {
+          if (t.pnl != null) {
+            if (t.pnl > 0) wins++;
+            else losses++;
+          }
+        }
+        this.state.wins = wins;
+        this.state.losses = losses;
+      }
 
       // Sync existing positions from Alpaca
       await this.syncPositions();

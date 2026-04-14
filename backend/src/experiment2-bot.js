@@ -45,6 +45,8 @@ function saveState(state) {
       startValue: state.startValue,
       wins: state.wins,
       losses: state.losses,
+      trades: state.trades,
+      equityHistory: state.equityHistory,
       positions: state.positions,
       cooldowns: state.cooldowns,
     }, null, 2));
@@ -99,8 +101,8 @@ class Experiment2Bot {
       positions: saved.positions || {},
       cooldowns: saved.cooldowns || {},  // symbol -> { until: ISO timestamp }
       signals: [],
-      trades: [],
-      equityHistory: [],
+      trades: saved.trades || [],
+      equityHistory: saved.equityHistory || [],
       wins: saved.wins || 0,
       losses: saved.losses || 0,
       startValue: saved.startValue || 0,
@@ -150,7 +152,18 @@ class Experiment2Bot {
         this.state.todayStartValue = this.state.portfolioValue;
       }
 
-      await this.syncTradeHistory();
+      // Only rebuild from Alpaca if we have no persisted trades (fresh start).
+      // Persisted trades have accurate net P&L; Alpaca rebuild uses gross P&L.
+      if (this.state.trades.length === 0) {
+        await this.syncTradeHistory();
+      } else {
+        let wins = 0, losses = 0;
+        for (const t of this.state.trades) {
+          if (t.pnl != null) { t.pnl > 0 ? wins++ : losses++; }
+        }
+        this.state.wins = wins;
+        this.state.losses = losses;
+      }
       await this.syncPositions();
 
       saveState(this.state);
