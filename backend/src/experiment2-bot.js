@@ -819,7 +819,7 @@ class Experiment2Bot {
       this.addEvent('success',
         `BUY ${symbol} @ $${fillPrice.toFixed(4)} | ${signal.reasons.join(' · ')} | SL $${hardStop.toFixed(2)} | TP $${takeProfit.toFixed(2)}${sizeLabel}${regimeTag}`
       );
-      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null, type: 'breakout' });
     } catch (err) {
       this.addEvent('danger', `Order failed for ${symbol}: ${err.message}`);
     }
@@ -864,7 +864,7 @@ class Experiment2Bot {
       this.addEvent('success',
         `SCALP BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | SMA $${sma20.toFixed(4)} | RSI ${rsi.toFixed(1)} | dip ${smaDip}% | ${tier}${regimeTag}`
       );
-      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null, type: 'scalp' });
     } catch (err) {
       this.addEvent('danger', `Scalp order failed for ${symbol}: ${err.message}`);
     }
@@ -908,7 +908,7 @@ class Experiment2Bot {
       this.addEvent('success',
         `BTC SCALP BUY @ $${fillPrice.toFixed(2)} | $${notional.toFixed(2)} | SMA $${sma20.toFixed(2)} | RSI ${rsi.toFixed(1)} | dip ${smaDip}% | ${countdown}`
       );
-      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null, type: 'btc-scalp' });
     } catch (err) {
       this.addEvent('danger', `BTC scalp order failed: ${err.message}`);
     }
@@ -988,7 +988,7 @@ class Experiment2Bot {
       this.addEvent('success',
         `[EXP2][BEAR] BTC tranche ${accStatus.tranches}/4 deployed at $${fillPrice.toFixed(2)} | $${notional.toFixed(2)}`
       );
-      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null, type: 'btc-dca' });
     } catch (err) {
       this.addEvent('danger', `BTC tranche order failed: ${err.message}`);
     }
@@ -1032,6 +1032,7 @@ class Experiment2Bot {
       this.recordTrade({
         symbol, side: 'SELL', qty: pos.qty, price: exitPrice, notional: pos.notional,
         time: new Date().toISOString(), pnl: parseFloat(pnl.toFixed(4)), reason: exitReason,
+        type: 'btc-dca',
       });
 
       // Record to performance tracker
@@ -1086,9 +1087,14 @@ class Experiment2Bot {
       this.addEvent(isWin ? 'success' : 'danger',
         `${reason}: ${symbol} @ $${exitPrice.toFixed(4)} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`
       );
+      const posType = pos.btcScalp ? 'btc-scalp'
+        : pos.scalpMode ? 'scalp'
+        : pos.bearMode ? 'btc-dca'
+        : 'breakout';
       this.recordTrade({
         symbol, side: 'SELL', qty: pos.qty, price: exitPrice, notional: pos.notional,
         time: new Date().toISOString(), pnl: parseFloat(pnl.toFixed(4)), reason,
+        type: posType,
       });
 
       // Record to performance tracker

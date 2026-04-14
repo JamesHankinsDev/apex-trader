@@ -673,7 +673,7 @@ class ExperimentBot {
       this.addEvent('success',
         `SCALP BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | SMA $${sma20.toFixed(4)} | RSI ${rsi} | dip ${signal.smaDip}%${regimeTag}`
       );
-      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null, type: 'scalp' });
     } catch (err) {
       this.addEvent('danger', `Scalp order failed for ${symbol}: ${err.message}`);
     }
@@ -740,7 +740,7 @@ class ExperimentBot {
       this.addEvent('success',
         `[EXP1][BEAR] Dead cat entry on ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | TP $${targetPrice.toFixed(2)} SL $${stopPrice.toFixed(2)}`
       );
-      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null, type: 'bear-dcb' });
     } catch (err) {
       this.addEvent('danger', `Order failed for ${symbol}: ${err.message}`);
     }
@@ -778,9 +778,11 @@ class ExperimentBot {
       this.addEvent(isWin ? 'success' : 'danger',
         `SELL ${symbol} @ $${exitPrice.toFixed(4)} | ${reason} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%) | hold ${holdMin}min`
       );
+      const posType = pos.scalpMode ? 'scalp' : pos.bearMode ? 'bear-dcb' : 'scalp';
       this.recordTrade({
         symbol, side: 'SELL', qty: pos.qty, price: exitPrice, notional: pos.notional,
         time: new Date().toISOString(), pnl: parseFloat(pnl.toFixed(4)), reason,
+        type: posType,
       });
 
       // Record to performance tracker

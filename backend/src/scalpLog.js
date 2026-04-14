@@ -226,11 +226,11 @@ function generateDaySummary(dateStr) {
 function getScalpLogStatus() {
   const today = new Date().toISOString().slice(0, 10);
   return {
-    recentTrades: state.scalpTrades.slice(-50).reverse(),
+    recentTrades: state.scalpTrades.slice(-500).reverse(),
     todaySummary: generateDaySummary(today),
     dailySummaries: state.dailySummaries.slice(-30),
     coinStats: getCoinStats(),
-    featureSnapshots: state.featureSnapshots.slice(-20).reverse(),
+    featureSnapshots: state.featureSnapshots.slice(-500).reverse(),
   };
 }
 

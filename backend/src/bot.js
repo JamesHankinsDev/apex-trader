@@ -851,7 +851,8 @@ class TradingBot {
 
       this.recordTrade({
         symbol, side: 'BUY', qty, price: fillPrice, notional,
-        time: new Date().toISOString(), pnl: null
+        time: new Date().toISOString(), pnl: null,
+        type: opts.bearRally ? 'bear-rally' : 'swing',
       });
 
     } catch (err) {
@@ -897,7 +898,7 @@ class TradingBot {
       this.addEvent('success',
         `SCALP BUY ${symbol} @ $${fillPrice.toFixed(4)} | $${notional.toFixed(2)} | SMA $${sma20.toFixed(4)} | RSI ${rsi.toFixed(1)} | dip ${smaDip}%${regimeTag}`
       );
-      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null });
+      this.recordTrade({ symbol, side: 'BUY', qty, price: fillPrice, notional, time: new Date().toISOString(), pnl: null, type: 'scalp' });
     } catch (err) {
       this.addEvent('danger', `Scalp order failed for ${symbol}: ${err.message}`);
     }
@@ -976,7 +977,7 @@ class TradingBot {
 
       this.recordTrade({
         symbol, side: 'BUY', qty, price: fillPrice, notional,
-        time: new Date().toISOString(), pnl: null
+        time: new Date().toISOString(), pnl: null, type: 'bear-range',
       });
 
     } catch (err) {
@@ -1135,10 +1136,15 @@ class TradingBot {
         `${reason}: ${symbol} @ $${exitPrice.toFixed(4)} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (fees ~$${totalCost.toFixed(2)})`
       );
 
+      const posType = pos.scalpMode ? 'scalp'
+        : pos.bearRally ? 'bear-rally'
+        : pos.bearMode ? 'bear-range'
+        : 'swing';
       this.recordTrade({
         symbol, side: 'SELL', qty: pos.qty, price: exitPrice,
         notional: pos.notional, time: new Date().toISOString(),
-        pnl: parseFloat(pnl.toFixed(4)), fees: parseFloat(totalCost.toFixed(4)), reason
+        pnl: parseFloat(pnl.toFixed(4)), fees: parseFloat(totalCost.toFixed(4)), reason,
+        type: posType,
       });
 
       // Record to performance tracker
