@@ -30,6 +30,7 @@ import TradeHeatmap from "./components/TradeHeatmap";
 import LiveTraderBanner from "./components/LiveTraderBanner";
 import useTradeNotifications from "./components/useTradeNotifications";
 import Expectations from "./components/Expectations";
+import History from "./components/History";
 
 // ─── Quiet mode: detect if anything actionable is happening ──
 function useQuietMode(botStatus) {
@@ -208,6 +209,7 @@ export default function Dashboard() {
   const [mode, setMode] = useState("paper");
   const [showGuide, setShowGuide] = useState(false);
   const [showExpectations, setShowExpectations] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [showDrawer, setShowDrawer] = useState(false);
   const [config, setConfig] = useState(null);
   const [activeTab, setActiveTab] = useState("main");
@@ -327,7 +329,7 @@ export default function Dashboard() {
 
   return (
     <div style={{ position: "relative", zIndex: 1, paddingBottom: 90 }}>
-      <Header running={running} mode={mode} setMode={setMode} clock={clock} onShowGuide={() => setShowGuide(true)} onShowDrawer={() => setShowDrawer(true)} onShowExpectations={() => setShowExpectations(true)} />
+      <Header running={running} mode={mode} setMode={setMode} clock={clock} onShowGuide={() => setShowGuide(true)} onShowDrawer={() => setShowDrawer(true)} onShowExpectations={() => setShowExpectations(true)} onShowHistory={() => setShowHistory(true)} />
       <LiveTraderBanner liveTrader={liveTrader} />
       <Leaderboard leaderboard={leaderboard} statuses={[
         { key: "main", status },
@@ -380,6 +382,17 @@ export default function Dashboard() {
       {showExpectations && (
         <Expectations
           onClose={() => setShowExpectations(false)}
+          statuses={[
+            { key: "main", status },
+            { key: "exp1", status: expStatus },
+            { key: "exp2", status: exp2Status },
+          ]}
+        />
+      )}
+      {showHistory && (
+        <History
+          onClose={() => setShowHistory(false)}
+          scalpLog={scalpLog}
           statuses={[
             { key: "main", status },
             { key: "exp1", status: expStatus },
