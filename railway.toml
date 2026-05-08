@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+buildCommand = "npm ci && cd frontend && npm ci && npm run build"
+
+[deploy]
+startCommand = "cd frontend && npx next start -p $PORT"
+healthcheckPath = "/"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

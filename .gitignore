@@ -6,15 +6,19 @@ node_modules/
 .env.local
 .env.*.local
 
-# Bot persistent state
-.bot-state.json
-
 #AI
 .claude
 
 # Next.js
 frontend/.next/
 frontend/out/
+*.tsbuildinfo
+
+# SQLite (engine writes data/apex.db; frontend reads it)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
 
 # Build
 dist/
