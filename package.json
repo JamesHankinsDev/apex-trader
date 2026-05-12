@@ -5,6 +5,7 @@
   "description": "APEX TRADER v2 — backtest-first crypto trading engine",
   "type": "module",
   "scripts": {
+    "init-db": "tsx src/scripts/initDb.ts",
     "fetch-bars": "tsx src/scripts/fetchBars.ts",
     "fetch-regimes": "tsx src/scripts/fetchRegimes.ts",
     "backtest": "tsx src/scripts/runBacktest.ts",
@@ -20,12 +21,12 @@
     "axios": "^1.6.0",
     "better-sqlite3": "^11.3.0",
     "date-fns": "^3.6.0",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "tsx": "^4.16.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.0.0",
-    "tsx": "^4.16.0",
     "typescript": "^5.5.0"
   }
 }

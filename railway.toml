@@ -3,7 +3,7 @@ builder = "nixpacks"
 buildCommand = "cd frontend && npm ci && npm run build"
 
 [deploy]
-startCommand = "cd frontend && npx next start -p $PORT"
+startCommand = "npm run init-db && cd frontend && npx next start -p $PORT"
 healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
