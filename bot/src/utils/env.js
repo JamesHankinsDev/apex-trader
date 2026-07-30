@@ -7,9 +7,20 @@ import { dirname, resolve } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// bot/.env takes precedence, then the repo-root .env as a fallback.
-loadDotenv({ path: resolve(__dirname, '../../.env') });
-loadDotenv({ path: resolve(__dirname, '../../../.env') });
+// dotenv does not overwrite an already-set var, so the FIRST file to define a
+// key wins. Order is most-specific to least: bot-local, bot, root-local, root.
+// `.env.local` is included because that's the Next.js convention and it's what
+// you reach for out of habit when the repo has a dashboard in it.
+const ENV_FILES = [
+  '../../.env.local',
+  '../../.env',
+  '../../../.env.local',
+  '../../../.env',
+];
+
+for (const rel of ENV_FILES) {
+  loadDotenv({ path: resolve(__dirname, rel) });
+}
 
 const PAPER_URL = 'https://paper-api.alpaca.markets';
 
@@ -55,10 +66,12 @@ function oneOf(key, allowed, fallback) {
 }
 
 /**
- * Load and validate the full bot environment.
- * @returns {object} frozen config object
+ * Load just the Alpaca credentials and trading mode.
+ * Separate from loadEnv() so credential checks don't require a grid config.
+ *
+ * @returns {Readonly<object>} { alpaca: {...}, tradingMode }
  */
-export function loadEnv() {
+export function loadAlpacaEnv() {
   const tradingMode = oneOf('TRADING_MODE', ['paper', 'live'], 'paper');
   let baseUrl = optional('ALPACA_BASE_URL', PAPER_URL);
 
@@ -69,14 +82,31 @@ export function loadEnv() {
     baseUrl = PAPER_URL;
   }
 
-  const env = {
-    alpaca: {
+  if (tradingMode === 'live') {
+    console.warn('[env] ⚠️  TRADING_MODE=live — orders will use real funds.');
+  }
+
+  return Object.freeze({
+    alpaca: Object.freeze({
       keyId: required('ALPACA_KEY_ID'),
       secretKey: required('ALPACA_SECRET_KEY'),
       baseUrl,
       dataUrl: optional('ALPACA_DATA_URL', 'https://data.alpaca.markets'),
       paper: tradingMode === 'paper',
-    },
+    }),
+    tradingMode,
+  });
+}
+
+/**
+ * Load and validate the full bot environment.
+ * @returns {object} frozen config object
+ */
+export function loadEnv() {
+  const { alpaca, tradingMode } = loadAlpacaEnv();
+
+  const env = {
+    alpaca,
     tradingMode,
     grid: {
       symbol: optional('GRID_SYMBOL', 'BTC/USD'),
@@ -97,10 +127,6 @@ export function loadEnv() {
       nodeEnv: optional('NODE_ENV', 'development'),
     },
   };
-
-  if (env.tradingMode === 'live') {
-    console.warn('[env] ⚠️  TRADING_MODE=live — orders will use real funds.');
-  }
 
   return Object.freeze(env);
 }
