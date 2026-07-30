@@ -160,6 +160,11 @@ export function loadEnv() {
       manualAnchor: optionalNum('GRID_ANCHOR_PRICE'),
       /** rolling only: re-anchor once drift exceeds this fraction of half-band. */
       reanchorDrift: pct('GRID_REANCHOR_DRIFT', 0.5),
+
+      /** session | on_flat | on_fill — when new levels adopt a new size. */
+      resizeMode: oneOf('GRID_RESIZE_MODE', ['session', 'on_flat', 'on_fill'], 'on_flat'),
+      /** Minimum relative size change worth acting on. Suppresses order churn. */
+      resizeThreshold: pct('GRID_RESIZE_THRESHOLD', 0.1),
     },
 
     risk: {

@@ -142,14 +142,27 @@ export class GridEngine {
   /**
    * Handle a fill: record it, then place the counter-order one level away.
    *
+   * MUST use counterOrderFor() from ./rebalance.js to build the closing
+   * order. It carries the original fill's quantity, which is the invariant
+   * that keeps round trips matched when the grid re-sizes mid-run. Sizing a
+   * closing order from freshly derived numbers gets it rejected for
+   * insufficient position, because Alpaca does not allow shorting crypto.
+   *
    * TODO(fill-tracking): implement.
    *   1. push a normalized fill onto this.fills
    *   2. clear this.openOrders for that level
-   *   3. submit the opposite side one level up (buy fill) or down (sell fill)
+   *   3. submit counterOrderFor(fill, this.levels) — null at the band edge
    *   4. emit realized PnL for the completed round trip
    */
   async onFill(_order) {
     throw new Error('GridEngine.onFill is not implemented yet.');
+  }
+
+  /** Net base-asset quantity held from grid buys, used to gate rebalancing. */
+  get openInventory() {
+    let net = 0;
+    for (const f of this.fills) net += f.side === 'buy' ? f.qty : -f.qty;
+    return Math.max(0, net);
   }
 
   /** Cancel every resting order and stop. */

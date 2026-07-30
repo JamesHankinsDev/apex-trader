@@ -91,6 +91,22 @@ The idling in `session`/`manual` is the feature. It's what stops the grid buying
 
 The anchor is persisted to `bot/state/anchor.json` (gitignored) so a restart doesn't silently re-centre a `session` grid.
 
+### Compounding while running
+
+`GRID_RESIZE_MODE` controls when newly-opened levels adopt a freshly derived size, so realized profit compounds without a restart:
+
+| Mode | Re-sizes | Resting book |
+|---|---|---|
+| `on_flat` *(default)* | once inventory is fully closed | one size at a time |
+| `on_fill` | after any fill past the threshold | mixed sizes |
+| `session` | never mid-run | one size |
+
+`GRID_RESIZE_THRESHOLD` (default 10%) suppresses churn — without it every cent of equity movement would cancel and replace the whole resting grid.
+
+**The invariant that makes this safe:** a counter-order carries the *original fill's* quantity, never the current derived size. `counterOrderFor()` in `grid/rebalance.js` is the only sanctioned way to build one. Sizing a closing order from fresh numbers makes buy and sell quantities drift apart — too large and Alpaca rejects it for insufficient position (you cannot short crypto), too small and inventory silently accumulates.
+
+Re-anchoring is separately gated by `canReanchor()`, which refuses while inventory is open: moving the band would strand held positions with no exit levels resting against them.
+
 ### Pinning absolute values
 
 Set `GRID_LOWER_BOUND`, `GRID_UPPER_BOUND`, **and** `GRID_ORDER_SIZE` together to opt out of derivation entirely. The bot warns when you do, because those values won't scale and you'll be re-setting them by hand.
