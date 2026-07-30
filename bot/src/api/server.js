@@ -56,8 +56,11 @@ export function createApiServer({
   }
 
   const routes = {
+    // ok reflects TRADING health, not process liveness. A halted bot is a
+    // process that is up and doing nothing — reporting ok:true there means a
+    // platform health check treats a dead strategy as healthy and never pages.
     '/health': () => ({
-      ok: true,
+      ok: !runner.halted,
       running: runner.running,
       halted: runner.halted,
       dryRun: runner.dryRun,
@@ -115,7 +118,9 @@ export function createApiServer({
     }
 
     try {
-      send(200, handler());
+      const body = handler();
+      // 503 on a halt so an uptime monitor actually fires.
+      send(path === '/health' && body?.ok === false ? 503 : 200, body);
     } catch (err) {
       logger.error?.(`[api] ${path} failed: ${err.message}`);
       send(500, { error: 'Internal error' });

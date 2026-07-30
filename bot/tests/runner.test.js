@@ -16,6 +16,19 @@ const config = normalizeGridConfig({
 
 const quiet = { warn() {}, info() {}, error() {} };
 
+/** In-memory state: a test must never write to bot/state/. */
+function memState() {
+  const store = new Map();
+  return {
+    readAnchor: (s) => store.get(`anchor:${s}`),
+    writeAnchor: (s, p) => store.set(`anchor:${s}`, p),
+    readHalt: () => store.get('halt') ?? null,
+    writeHalt: (reason, ctx) => store.set('halt', { reason, at: 'test', ...ctx }),
+    clearHalt: () => store.delete('halt'),
+  };
+}
+
+
 function env({ dryRun = false, stopPct, maxDailyLossPct = 0.05 } = {}) {
   return {
     grid: { symbol: 'BTC/USD', levels: 11, spacing: 'arithmetic' },
@@ -87,7 +100,7 @@ test('stop percentages outside (0,1) are rejected', () => {
 test('daily loss halts BEFORE any order is placed', async () => {
   // 5% of 100 = -5.00 limit; down 6.
   const client = fakeClient({ equity: 94, lastEquity: 100 });
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
 
   const s = await r.tick();
 
@@ -98,7 +111,7 @@ test('daily loss halts BEFORE any order is placed', async () => {
 
 test('a loss inside the limit keeps trading', async () => {
   const client = fakeClient({ equity: 97, lastEquity: 100 }); // -3 vs -5 limit
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
 
   const s = await r.tick();
 
@@ -108,10 +121,10 @@ test('a loss inside the limit keeps trading', async () => {
 
 test('the daily limit scales, so the same drop is fatal only at small size', async () => {
   // -$6 breaches a $100 account (-5%) but not a $1000 one (-0.6%).
-  const small = new Runner({ env: env(), client: fakeClient({ equity: 94, lastEquity: 100 }), logger: quiet });
+  const small = new Runner({ env: env(), client: fakeClient({ equity: 94, lastEquity: 100 }), logger: quiet, state: memState() });
   assert.equal((await small.tick()).halted, HALT.DAILY_LOSS);
 
-  const big = new Runner({ env: env(), client: fakeClient({ equity: 994, lastEquity: 1000 }), logger: quiet });
+  const big = new Runner({ env: env(), client: fakeClient({ equity: 994, lastEquity: 1000 }), logger: quiet, state: memState() });
   assert.equal((await big.tick()).halted, undefined);
 });
 
@@ -119,7 +132,7 @@ test('the daily limit scales, so the same drop is fatal only at small size', asy
 
 test('price stop liquidates held inventory and halts', async () => {
   const client = fakeClient({ price: 65000 });
-  const r = new Runner({ env: env({ stopPct: 0.1 }), client, logger: quiet });
+  const r = new Runner({ env: env({ stopPct: 0.1 }), client, logger: quiet, state: memState() });
 
   await r.tick(); // build + place
   r.engine.inventory.set(2, { qty: 0.002, price: 59000 });
@@ -141,7 +154,7 @@ test('price stop liquidates held inventory and halts', async () => {
 
 test('no stop configured means inventory is held, not cut', async () => {
   const client = fakeClient({ price: 65000 });
-  const r = new Runner({ env: env({ stopPct: undefined }), client, logger: quiet });
+  const r = new Runner({ env: env({ stopPct: undefined }), client, logger: quiet, state: memState() });
 
   await r.tick();
   r.engine.inventory.set(2, { qty: 0.002, price: 59000 });
@@ -156,7 +169,7 @@ test('no stop configured means inventory is held, not cut', async () => {
 
 test('the stop does not fire when flat', async () => {
   const client = fakeClient({ price: 65000 });
-  const r = new Runner({ env: env({ stopPct: 0.1 }), client, logger: quiet });
+  const r = new Runner({ env: env({ stopPct: 0.1 }), client, logger: quiet, state: memState() });
 
   await r.tick();
   client.getLatestCryptoQuote = async () => ({ quotes: { 'BTC/USD': { bp: 20000, ap: 20010 } } });
@@ -186,7 +199,7 @@ test('our own resting orders are added back to buying power', async () => {
   ];
   // Alpaca reports what's LEFT after those reservations.
   const client = fakeClient({ equity: 100, open });
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
 
   const live = await r.readLiveState();
 
@@ -199,7 +212,7 @@ test('orders placed by hand are NOT added back', async () => {
   const open = [
     { id: 'manual', symbol: 'BTC/USD', side: 'buy', client_order_id: 'my-own', qty: '1', limit_price: '60000', status: 'open' },
   ];
-  const r = new Runner({ env: env(), client: fakeClient({ equity: 100, open }), logger: quiet });
+  const r = new Runner({ env: env(), client: fakeClient({ equity: 100, open }), logger: quiet, state: memState() });
 
   const live = await r.readLiveState();
 
@@ -215,7 +228,7 @@ test('resting sells do not inflate buying power', async () => {
       qty: '0.0002', limit_price: '70000', status: 'open',
     },
   ];
-  const r = new Runner({ env: env(), client: fakeClient({ equity: 100, open }), logger: quiet });
+  const r = new Runner({ env: env(), client: fakeClient({ equity: 100, open }), logger: quiet, state: memState() });
 
   const live = await r.readLiveState();
   assert.equal(live.reserved, 0, 'a sell reserves inventory, not cash');
@@ -237,7 +250,7 @@ test('a partially placed grid still converges on the next tick', async () => {
     buying_power: String(100 - reserved), // what Alpaca actually reports
   });
 
-  const r = new Runner({ env: { ...env(), grid: { symbol: 'BTC/USD', levels: 5, spacing: 'geometric' } }, client, logger: quiet });
+  const r = new Runner({ env: { ...env(), grid: { symbol: 'BTC/USD', levels: 5, spacing: 'geometric' } }, client, logger: quiet, state: memState() });
 
   const s = await r.tick();
   assert.equal(s.halted, undefined, 'must not stall on its own reservations');
@@ -255,7 +268,7 @@ test('a fill is recorded once and never double-counted', async () => {
     filled_avg_price: '61000',
   };
   const client = fakeClient({ price: 65000 });
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
 
   await r.tick(); // first tick seeds seenFills
   client.getOrders = async ({ status }) => (status === 'closed' ? [filled] : []);
@@ -269,7 +282,7 @@ test('a fill is recorded once and never double-counted', async () => {
 
 test('reconcile is the only writer — recordFill submits nothing', async () => {
   const client = fakeClient({ price: 65000 });
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
   await r.tick();
 
   const before = client.calls.submitted.length;
@@ -294,7 +307,7 @@ test('the loop survives a transient API failure', async () => {
     return original();
   };
 
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
   const out = await r.start({ maxTicks: 4 });
 
   assert.equal(out.ticks, 4, 'it kept going');
@@ -303,7 +316,7 @@ test('the loop survives a transient API failure', async () => {
 
 test('the loop stops itself on a halt', async () => {
   const client = fakeClient({ equity: 90, lastEquity: 100 });
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
 
   const out = await r.start({ maxTicks: 10 });
 
@@ -313,7 +326,7 @@ test('the loop stops itself on a halt', async () => {
 
 test('dry run places nothing, including the stop liquidation', async () => {
   const client = fakeClient({ price: 65000 });
-  const r = new Runner({ env: env({ dryRun: true, stopPct: 0.1 }), client, logger: quiet });
+  const r = new Runner({ env: env({ dryRun: true, stopPct: 0.1 }), client, logger: quiet, state: memState() });
 
   await r.tick();
   r.engine.inventory.set(2, { qty: 0.002, price: 59000 });

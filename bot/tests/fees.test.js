@@ -125,6 +125,7 @@ test('an exit already resting does not cancel itself next tick', async () => {
       cancelOrder: async () => ({}),
     },
     logger: { warn() {}, info() {} },
+    state: { readAnchor: () => undefined, writeAnchor: () => {}, readHalt: () => null, writeHalt: () => {} },
   });
 
   const live = await runner.readLiveState();

@@ -62,6 +62,7 @@ npm run bot:check            # read-only: verify Alpaca credentials
 npm run bot                  # one pass: derive the grid, report what it would rest
 npm run bot:loop             # continuous run loop (Ctrl-C to stop)
 npm run bot:probe            # measure exchange notional floors (paper only)
+npm run bot:resume           # clear a latched halt
 npm run dashboard            # http://localhost:3000
                              # http://localhost:3000/prototype/index.html  <- mobile UI (mock)
 npm test                     # all workspace tests
@@ -168,7 +169,11 @@ Three things will bite you if you skip them:
 
 **2. `bot/state/` must be a persistent volume.** The anchor lives in `bot/state/anchor.json`. Container filesystems are ephemeral, so without a mounted volume every redeploy silently re-centres the grid on whatever price it restarts at — including while holding inventory, which is exactly what `on_flat` exists to prevent. Mount a volume at `bot/state`, or move the anchor into a database.
 
-**3. Set `API_TOKEN`.** Without it the API refuses to bind publicly, so the dashboard on Vercel simply can't reach it. With it, generate a real random value and set the matching `BOT_API_TOKEN` on Vercel.
+**3. A halt must survive a restart — it now does.** `loop.js` used to exit non-zero on a halt, and every platform restarts on that by default. After a price stop the bot is *flat*, which frees `on_flat` to re-anchor on the crashed price and buy straight back into what the stop just exited. The stop was decorative under supervision.
+
+Halts are now latched to `bot/state/halt.json`. A restarted process reads the latch and refuses to trade until you run `npm run bot:resume`. The process stays up rather than exiting, so there is no crash loop, and `/health` returns **503** with `ok:false` so an uptime monitor actually fires. This is another reason `bot/state/` must be a persistent volume — on an ephemeral filesystem the latch dies with the container and the stop is defeated again.
+
+**4. Set `API_TOKEN`.** Without it the API refuses to bind publicly, so the dashboard on Vercel simply can't reach it. With it, generate a real random value and set the matching `BOT_API_TOKEN` on Vercel.
 
 Environment split:
 

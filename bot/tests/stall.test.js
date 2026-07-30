@@ -6,6 +6,19 @@ import { parseNotionalFloor } from '../src/api/probe-minimums.js';
 
 const quiet = { warn() {}, info() {}, error() {} };
 
+/** In-memory state: a test must never write to bot/state/. */
+function memState() {
+  const store = new Map();
+  return {
+    readAnchor: (s) => store.get(`anchor:${s}`),
+    writeAnchor: (s, p) => store.set(`anchor:${s}`, p),
+    readHalt: () => store.get('halt') ?? null,
+    writeHalt: (reason, ctx) => store.set('halt', { reason, at: 'test', ...ctx }),
+    clearHalt: () => store.delete('halt'),
+  };
+}
+
+
 function env() {
   return {
     grid: { symbol: 'BTC/USD', levels: 5, spacing: 'geometric' },
@@ -36,7 +49,7 @@ function rejectingClient(reason = 'cost basis must be >= minimal amount of order
 // ---- the bug this exists to prevent ---------------------------------------
 
 test('a tick with every order rejected is NOT reported as converged', async () => {
-  const r = new Runner({ env: env(), client: rejectingClient(), logger: quiet });
+  const r = new Runner({ env: env(), client: rejectingClient(), logger: quiet, state: memState() });
 
   const s = await r.tick();
 
@@ -47,7 +60,7 @@ test('a tick with every order rejected is NOT reported as converged', async () =
 });
 
 test('the log line shouts about rejections instead of looking idle', async () => {
-  const r = new Runner({ env: env(), client: rejectingClient(), logger: quiet });
+  const r = new Runner({ env: env(), client: rejectingClient(), logger: quiet, state: memState() });
   const s = await r.tick();
 
   const line = r.format(s);
@@ -58,7 +71,7 @@ test('the log line shouts about rejections instead of looking idle', async () =>
 test('a healthy converged tick does not mention rejections', async () => {
   const client = rejectingClient();
   client.submitOrder = async (o) => ({ id: 'ok', ...o });
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
 
   const first = await r.tick();
   assert.ok(first.submitted > 0);
@@ -70,7 +83,7 @@ test('a healthy converged tick does not mention rejections', async () => {
 
 test('the loop halts after STALL_LIMIT consecutive all-rejected ticks', async () => {
   const client = rejectingClient();
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
 
   const out = await r.start({ maxTicks: 20 });
 
@@ -79,7 +92,7 @@ test('the loop halts after STALL_LIMIT consecutive all-rejected ticks', async ()
 });
 
 test('the halt names the exchange reason so the cause is obvious', async () => {
-  const r = new Runner({ env: env(), client: rejectingClient(), logger: quiet });
+  const r = new Runner({ env: env(), client: rejectingClient(), logger: quiet, state: memState() });
 
   await r.tick();
   await r.tick();
@@ -96,7 +109,7 @@ test('one good tick resets the stall counter', async () => {
     if (fail) throw new Error('cost basis must be >= minimal amount of order 10');
     return { id: 'ok', ...o };
   };
-  const r = new Runner({ env: env(), client, logger: quiet });
+  const r = new Runner({ env: env(), client, logger: quiet, state: memState() });
 
   await r.tick();
   await r.tick();
@@ -108,7 +121,7 @@ test('one good tick resets the stall counter', async () => {
 });
 
 test('rejections reach the dashboard snapshot', async () => {
-  const r = new Runner({ env: env(), client: rejectingClient(), logger: quiet });
+  const r = new Runner({ env: env(), client: rejectingClient(), logger: quiet, state: memState() });
   await r.tick();
 
   const snap = r.snapshot();

@@ -50,4 +50,25 @@ export function writeAnchor(symbol, price, meta = {}) {
   return writeState('anchor', all);
 }
 
+/* ---- Halt latch ---------------------------------------------------------
+   A halt must SURVIVE the process. Platforms restart on non-zero exit, so an
+   in-memory halt is undone by the supervisor seconds later — and after a price
+   stop the bot is flat, which frees on_flat to re-anchor on the crashed price
+   and buy straight back into what it just exited. The stop becomes decorative.
+
+   Latching it to disk makes clearing it a deliberate human act. */
+
+export function readHalt() {
+  const h = readState('halt', null);
+  return h && h.reason ? h : null;
+}
+
+export function writeHalt(reason, context = {}) {
+  return writeState('halt', { reason, at: new Date().toISOString(), ...context });
+}
+
+export function clearHalt() {
+  return writeState('halt', {});
+}
+
 export { STATE_DIR };

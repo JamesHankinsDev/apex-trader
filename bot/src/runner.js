@@ -333,18 +333,52 @@ export class Runner {
     return order;
   }
 
-  /** Stop the loop. Cancels resting orders; does NOT liquidate. */
-  async halt(reason) {
+  /**
+   * Stop the loop and LATCH it to disk. Cancels resting orders; does not
+   * liquidate. The latch is what makes a halt survive a supervisor restart.
+   */
+  async halt(reason, context = {}) {
     this.halted = reason;
     this.running = false;
     this.logger.warn?.(`[runner] halted: ${reason}`);
+
+    try {
+      this.state.writeHalt?.(reason, {
+        symbol: this.symbol,
+        price: this.lastTick?.price,
+        equity: this.lastTick?.equity,
+        ...context,
+      });
+    } catch (err) {
+      this.logger.warn?.(`[runner] could not latch halt: ${err.message}`);
+    }
+
     if (this.engine && !this.dryRun) await this.engine.shutdown();
+  }
+
+  /** A halt latched by a previous process, if any. */
+  latchedHalt() {
+    try {
+      return this.state.readHalt?.() ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /**
    * One pass. Returns a summary of what it did.
    */
   async tick() {
+    // A latched halt outlives the process that set it. Refuse to trade until
+    // a human clears it, otherwise a restart silently resumes.
+    const latched = this.latchedHalt();
+    if (latched && !this.halted) {
+      this.halted = latched.reason;
+      this.running = false;
+      this.logger.warn?.(`[runner] refusing to trade — halt latched ${latched.at}: ${latched.reason}`);
+      return { halted: latched.reason, latched: true, at: latched.at };
+    }
+
     this.ticks++;
     const live = await this.readLiveState();
     const risk = resolveRiskLimits(this.env.risk, live.equity);
