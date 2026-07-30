@@ -151,43 +151,15 @@ Fills assume no slippage past the limit, which is the optimistic end. Intrabar p
 
 ## Deploying
 
-**Yes — Railway for the bot, Vercel for the dashboard.** The bot cannot be serverless: a grid needs a process that stays up between ticks, holds inventory state, and cancels its book on shutdown. Vercel functions are ephemeral, so the bot needs a long-running host (Railway, Fly, Render, or a VPS). The dashboard is a normal Next app and Vercel is a good fit.
+Step-by-step for Railway (bot) + Vercel (dashboard): **[DEPLOY.md](DEPLOY.md)**.
 
-```
-Railway ──────────────┐          ┌───────────── Vercel
-  bot:loop            │          │   Next dashboard
-  ├─ run loop ────────┼─ Alpaca  │   ├─ /live (browser polls same-origin)
-  └─ API :4000  ◄─────┼──────────┼── └─ /api/bot/* (adds BOT_API_TOKEN here)
-     (API_TOKEN)      │          │
-     + volume for     │          │   BOT_API_URL, BOT_API_TOKEN
-       bot/state/     │          │   are SERVER-ONLY (no NEXT_PUBLIC_)
-```
+Three things there are easy to miss and each has teeth:
 
-Three things will bite you if you skip them:
+- **A volume at `bot/state`** — without it every redeploy wipes the anchor *and* the halt latch, so a price stop is defeated by a deploy
+- **`API_TOKEN`** — without it the API binds `127.0.0.1` and Vercel cannot reach it at all
+- **One replica** — two both run `reconcile()` against the same account and double every order
 
-**1. Exactly one instance.** Two replicas both run `reconcile()` against the same account, so every level gets two orders and every fill two counter-orders. Pin replicas to 1. Also mind rolling deploys — if the platform starts the new container before stopping the old one, they overlap and you get double orders for that window. Prefer a stop-then-start deploy strategy.
-
-**2. `bot/state/` must be a persistent volume.** The anchor lives in `bot/state/anchor.json`. Container filesystems are ephemeral, so without a mounted volume every redeploy silently re-centres the grid on whatever price it restarts at — including while holding inventory, which is exactly what `on_flat` exists to prevent. Mount a volume at `bot/state`, or move the anchor into a database.
-
-**3. A halt must survive a restart — it now does.** `loop.js` used to exit non-zero on a halt, and every platform restarts on that by default. After a price stop the bot is *flat*, which frees `on_flat` to re-anchor on the crashed price and buy straight back into what the stop just exited. The stop was decorative under supervision.
-
-Halts are now latched to `bot/state/halt.json`. A restarted process reads the latch and refuses to trade until you run `npm run bot:resume`. The process stays up rather than exiting, so there is no crash loop, and `/health` returns **503** with `ok:false` so an uptime monitor actually fires. This is another reason `bot/state/` must be a persistent volume — on an ephemeral filesystem the latch dies with the container and the stop is defeated again.
-
-**4. Set `API_TOKEN`.** Without it the API refuses to bind publicly, so the dashboard on Vercel simply can't reach it. With it, generate a real random value and set the matching `BOT_API_TOKEN` on Vercel.
-
-Environment split:
-
-| Railway (bot) | Vercel (dashboard) |
-|---|---|
-| `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY` | `BOT_API_URL` — the Railway public URL |
-| `TRADING_MODE`, `DRY_RUN` | `BOT_API_TOKEN` — matches the bot's `API_TOKEN` |
-| `GRID_*`, `MAX_DAILY_LOSS_PCT` | |
-| `API_TOKEN`, `API_HOST=0.0.0.0` | |
-| `DASHBOARD_ORIGIN` — your Vercel URL | |
-
-Alpaca keys never go near Vercel. The dashboard only ever talks to the bot.
-
-Point the platform's health check at `/health`, which stays open without the token.
+Paper trading is enforced by the credentials themselves: `PK` keys return 401 against the live endpoint, so a misconfigured deploy cannot reach real money.
 
 ## Grid strategy
 

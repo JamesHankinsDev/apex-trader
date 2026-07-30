@@ -225,7 +225,12 @@ export function loadEnv() {
       dryRun: bool('DRY_RUN', true),
       pollIntervalMs: num('POLL_INTERVAL_MS', 5000),
       logLevel: optional('LOG_LEVEL', 'info'),
-      apiPort: num('API_PORT', 4000),
+      /**
+       * Railway, Render, Fly and Heroku all inject PORT and route to it.
+       * Honour that first, or the platform health check hits a closed port
+       * and the deploy is marked failed while the bot runs fine.
+       */
+      apiPort: optionalNum('PORT') ?? num('API_PORT', 4000),
       /** Without this the API binds 127.0.0.1 only. Required to expose it. */
       apiToken: optional('API_TOKEN', undefined),
       apiHost: optional('API_HOST', undefined),
