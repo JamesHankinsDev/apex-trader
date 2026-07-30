@@ -63,11 +63,13 @@ npm run bot                  # one pass: derive the grid, report what it would r
 npm run bot:loop             # continuous run loop (Ctrl-C to stop)
 npm run bot:probe            # measure exchange notional floors (paper only)
 npm run dashboard            # http://localhost:3000
-                             # http://localhost:3000/prototype  <- mobile UI (mock data)
+                             # http://localhost:3000/prototype/index.html  <- mobile UI (mock)
 npm test                     # all workspace tests
 ```
 
 `DRY_RUN` defaults to **true** even when unset or empty, so all of the above are safe. Set `DRY_RUN=false` to place real (paper) orders.
+
+> ⚠️ **Never run `npm run dashboard:build` while `npm run dashboard` is live.** Both write to `dashboard/.next`, and the production build clobbers the dev server's chunk manifest — you get `Cannot find module './387.js'` at runtime. Recover with `rm -rf dashboard/.next` and restart the dev server.
 
 ### The run loop
 
@@ -286,7 +288,9 @@ So a cold start from flat rests **only buys**; sells appear as buys fill. `assig
 
 Orders are tagged with a `client_order_id` of the form `apex-BTCUSD-L7-sell-42`, so `reconcile()` only ever touches its own orders (anything you place by hand in the Alpaca UI is left alone) and `hydrate()` can rebuild inventory from exchange history after a restart.
 
-**2. The prototype UI runs, but on mock data.** `npm run dashboard` then open **http://localhost:3000/prototype**.
+**2. The prototype UI runs, but on mock data.** `npm run dashboard` then open **http://localhost:3000/prototype/index.html**.
+
+The explicit `index.html` is required: Next serves `public/` at literal paths and does not resolve directory indexes, so bare `/prototype` 404s.
 
 This is the Claude Design build vendored verbatim — React 18 UMD + Babel-in-browser, components as `window` globals. It is deliberately *outside* the Next.js build (it lives in `public/`, which Next serves as static files). It does not use React 19, Tailwind, or any bundler.
 

@@ -1,10 +1,9 @@
 /* Apex Trader — dashboard shell.
 
-   The mobile prototype in app/components/ is NOT mounted here yet. Those files
-   are browser-global IIFEs (they read `React` and
-   `window.ApexTraderDesignSystem_cd55a5` off the window rather than importing
-   anything), so Next.js cannot import them as modules. See README for the
-   migration checklist. */
+   The mobile prototype lives in public/prototype/ and runs as a vendored
+   browser bundle (React 18 UMD + Babel, components as window globals), served
+   statically. It is NOT importable by Next and still renders mock data — see
+   README for the migration checklist. /live is the real one. */
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
@@ -12,9 +11,10 @@ const STEPS = [
   { label: 'Monorepo + build config', done: true },
   { label: 'Grid level calculation', done: true },
   { label: 'Design system + prototype UI', done: true },
-  { label: 'Alpaca client + credential check', done: false },
-  { label: 'Order placement + fill tracking', done: false },
-  { label: 'Dashboard API endpoints', done: false },
+  { label: 'Alpaca client + credential check', done: true },
+  { label: 'Order placement + fill tracking', done: true },
+  { label: 'Run loop + daily and price stops', done: true },
+  { label: 'Dashboard API endpoints', done: true },
   { label: 'Port prototype to real data', done: false },
   { label: '6-month backtest harness', done: false },
 ];
@@ -79,7 +79,7 @@ export default function Home() {
         </a>
 
         <a
-          href="/prototype"
+          href="/prototype/index.html"
           style={{
             display: 'inline-flex',
             alignItems: 'center',
