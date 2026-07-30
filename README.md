@@ -323,9 +323,11 @@ Upstream source: `claude.ai/design/p/0dc922ad-d90b-49a0-82c3-a20c7a389ff4`. A se
 - [x] Monorepo + build config
 - [x] Grid level calculation + config validation
 - [x] Design system vendored — prototype UI runs at `/prototype`
-- [ ] Alpaca client + account smoke test (credentials still unverified)
+- [x] Alpaca client + account smoke test
 - [x] Order placement + fill tracking
 - [x] Run loop + daily and price stops
 - [x] Dashboard API endpoints + live monitor page
+- [ ] 6-month backtest harness
 - [ ] Port prototype components to ES modules, on real data
+- [ ] Deploy (Railway + Vercel)
 - [ ] 6-month backtest harness
