@@ -16,6 +16,7 @@
     "bot": "npm run start --workspace=bot",
     "bot:dev": "npm run dev --workspace=bot",
     "bot:check": "npm run check --workspace=bot",
+    "bot:loop": "npm run loop --workspace=bot",
     "bot:backtest": "npm run backtest --workspace=bot",
     "dashboard": "npm run dev --workspace=dashboard",
     "dashboard:build": "npm run build --workspace=dashboard",

@@ -10,16 +10,24 @@ Grid-based algorithmic crypto trading bot on [Alpaca](https://alpaca.markets/), 
 apex-trader/
 ├── bot/                      # trading engine (Node, ESM)
 │   ├── src/
-│   │   ├── index.js          # entry point — currently a dry run
+│   │   ├── index.js          # one-shot: derive grid, report the book
+│   │   ├── loop.js           # continuous run loop entry
+│   │   ├── runner.js         # tick: stops -> fills -> resize -> reconcile
 │   │   ├── grid/
-│   │   │   ├── config.js     # strategy config: normalize + validate
-│   │   │   └── engine.js     # level calc (done), placement/fills (TODO)
-│   │   ├── api/              # dashboard API — empty
+│   │   │   ├── config.js     # normalize, validate, resolve stops
+│   │   │   ├── sizing.js     # ratios -> concrete grid, anchor policy
+│   │   │   ├── rebalance.js  # resize triggers + round-trip invariant
+│   │   │   └── engine.js     # levels, desired book, reconcile, fills
+│   │   ├── api/
+│   │   │   ├── alpaca.js     # REST client over fetch
+│   │   │   └── check-account.js
 │   │   ├── data/             # market data adapters — empty
 │   │   ├── logging/          # structured logging — empty
-│   │   └── utils/env.js      # env loading + safety interlocks
+│   │   └── utils/
+│   │       ├── env.js        # env loading + safety interlocks
+│   │       └── state.js      # anchor persistence
 │   ├── backtest/             # backtest harness — empty
-│   └── tests/
+│   └── tests/                # 75 tests
 ├── dashboard/                # Next.js 15 App Router
 │   ├── app/
 │   │   ├── page.js           # build-status shell
@@ -47,11 +55,31 @@ Requires Node >= 20.
 ## Running
 
 ```bash
-npm run bot                  # dry run: validates config, prints the grid
+npm run bot:check            # read-only: verify Alpaca credentials
+npm run bot                  # one pass: derive the grid, report what it would rest
+npm run bot:loop             # continuous run loop (Ctrl-C to stop)
 npm run dashboard            # http://localhost:3000
                              # http://localhost:3000/prototype  <- mobile UI (mock data)
 npm test                     # all workspace tests
 ```
+
+`DRY_RUN` defaults to **true** even when unset or empty, so all of the above are safe. Set `DRY_RUN=false` to place real (paper) orders.
+
+### The run loop
+
+Each tick: read live state → check stops → ingest fills → maybe resize → maybe re-anchor → reconcile.
+
+```
+[   1] $64818.69  inv 0  realized +$0.00  day +$0.00/$-5.00  +11/-0
+                  │              │                  │         └─ submitted/cancelled
+                  │              │                  └─ daily limit
+                  │              └─ realized P&L this run
+                  └─ open inventory
+```
+
+Ordering inside a tick is deliberate: **stops are evaluated before anything is placed**, so a breached limit can never be followed by fresh exposure in the same pass. `reconcile()` is the only thing that submits grid orders — fills are recorded via `recordFill()` for accounting and never re-submitted, otherwise every fill would get two counter-orders.
+
+A failed tick is logged and retried rather than killing the process, so a transient 502 doesn't stop an unattended bot. Ctrl-C cancels resting orders before exiting: with the bot stopped nothing would place a counter-order against a fill, so leaving the book resting would let a buy fill with no exit behind it.
 
 ## Grid strategy
 
@@ -96,6 +124,28 @@ The idling is the feature. It's what stops the grid buying all the way down a tr
 
 The anchor is persisted to `bot/state/anchor.json` (gitignored) so a restart doesn't silently re-centre a `session` grid.
 
+### Two stops, both scaled to the portfolio
+
+They catch different failures, and neither is an absolute number you have to maintain.
+
+| | Scales from | Limits | Default |
+|---|---|---|---|
+| `MAX_DAILY_LOSS_PCT` | live equity | how **fast** you lose | 5% |
+| `GRID_STOP_PCT` | the band | how **far** one position runs against you | off |
+
+```
+daily stop = equity     × MAX_DAILY_LOSS_PCT     -$5 at $100, -$500 at $10k
+stop price = lowerBound × (1 − GRID_STOP_PCT)    moves whenever the band moves
+```
+
+Daily P&L comes from Alpaca's `last_equity` (prior session close), so it needs no local bookkeeping and survives restarts for free.
+
+**On breach they behave differently, on purpose.** The daily stop cancels resting orders and halts but *keeps the position* — halting is not the same as liquidating, and forcing an exit on a fast drawdown is usually the wrong reflex. The price stop does liquidate, with a market order, because its whole purpose is to bound a single position's loss.
+
+`GRID_STOP_PCT` is opt-in and unset by default. Without it, inventory stranded below the band is held indefinitely and `on_flat` never re-anchors — the bot idles. Setting it converts that indefinite idle into a bounded, realized loss, after which the grid is flat and free to re-centre. That's a real trade-off: it crystallises losses that might have recovered.
+
+`MAX_DAILY_LOSS_USD` remains available as a hard dollar floor; the tighter of the two wins.
+
 ### Compounding while running
 
 `GRID_RESIZE_MODE` controls when newly-opened levels adopt a freshly derived size, so realized profit compounds without a restart:
@@ -118,9 +168,8 @@ Set `GRID_LOWER_BOUND`, `GRID_UPPER_BOUND`, **and** `GRID_ORDER_SIZE` together t
 
 ## Known gaps
 
-**1. Nothing has traded yet.** `reconcile()` and `onFill()` are implemented and tested, but `DRY_RUN` defaults to **true** even when unset — the bot plans the book and reports it, and submits nothing. Set `DRY_RUN=false` to place real (paper) orders.
+**1. Nothing has traded yet.** `DRY_RUN` defaults to **true** even when unset — the bot plans the book and reports it, and submits nothing. Set `DRY_RUN=false` to place real (paper) orders.
 
-There is also no run loop yet: `npm run bot` reconciles once and exits. Continuous operation needs a poll loop around `reconcile()` plus a fill stream.
 
 ### What actually rests
 
@@ -167,7 +216,8 @@ Upstream source: `claude.ai/design/p/0dc922ad-d90b-49a0-82c3-a20c7a389ff4`. A se
 - [x] Grid level calculation + config validation
 - [x] Design system vendored — prototype UI runs at `/prototype`
 - [ ] Alpaca client + account smoke test (credentials still unverified)
-- [ ] Order placement + fill tracking
+- [x] Order placement + fill tracking
+- [x] Run loop + daily and price stops
 - [ ] Dashboard API endpoints
 - [ ] Port prototype components to ES modules, on real data
 - [ ] 6-month backtest harness

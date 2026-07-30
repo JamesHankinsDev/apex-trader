@@ -123,6 +123,40 @@ export function resolveRiskLimits(risk, equity) {
 }
 
 /**
+ * Price at which stranded inventory is cut, derived from the band the same
+ * way the bounds are — so it rescales whenever the band does.
+ *
+ *   stopPrice = lowerBound x (1 - stopPct)
+ *
+ * This is the counterpart to the daily loss stop, and they catch different
+ * failures. The daily stop is a dollar limit on how fast you can lose; this
+ * is a price limit on how far one position can run against you. With
+ * `on_flat` anchoring, a position that never recovers idles the bot forever —
+ * this converts that indefinite idle into a bounded, realized loss, after
+ * which the grid is flat and free to re-anchor.
+ *
+ * Opt-in: returns null when stopPct is undefined, and the bot simply holds.
+ *
+ * @param {object} gridConfig  normalized grid config
+ * @param {number} [stopPct]   fraction below lowerBound, e.g. 0.10
+ * @returns {{ stopPrice: number, distancePct: number } | null}
+ */
+export function resolveStopPrice(gridConfig, stopPct) {
+  if (stopPct === undefined || stopPct === null) return null;
+
+  assert(Number.isFinite(stopPct) && stopPct > 0 && stopPct < 1,
+    `GRID_STOP_PCT must be a ratio in (0, 1), got ${stopPct}.`);
+
+  const stopPrice = gridConfig.lowerBound * (1 - stopPct);
+
+  return {
+    stopPrice,
+    /** How far the stop sits below the anchor, for reporting. */
+    distancePct: 1 - stopPrice / gridConfig.upperBound,
+  };
+}
+
+/**
  * Refuse a grid the account cannot actually fund.
  * Checked against LIVE buying power rather than a static env number, so it
  * stays correct as the balance moves.

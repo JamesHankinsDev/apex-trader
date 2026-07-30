@@ -12,6 +12,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "check": "node src/api/check-account.js",
+    "loop": "node src/loop.js",
     "backtest": "node backtest/run.js",
     "test": "node --test"
   },

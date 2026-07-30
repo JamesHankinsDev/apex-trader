@@ -85,21 +85,22 @@ export function createClient(cfg) {
       request('/v2/orders', { query: { status: 'open', limit: 100, ...opts } }),
 
     /**
-     * Submit a resting limit order.
-     * GTC because grid levels are meant to sit until price reaches them.
+     * Submit an order. Defaults to a resting GTC limit, because grid levels
+     * are meant to sit until price reaches them. `type: 'market'` is used for
+     * stop-loss liquidation, where filling matters more than the price.
      *
-     * @param {object} o  { symbol, side, qty, limitPrice, clientOrderId }
+     * @param {object} o  { symbol, side, qty, limitPrice, clientOrderId, type }
      */
-    submitOrder: ({ symbol, side, qty, limitPrice, clientOrderId }) =>
+    submitOrder: ({ symbol, side, qty, limitPrice, clientOrderId, type = 'limit' }) =>
       request('/v2/orders', {
         method: 'POST',
         body: {
           symbol,
           side,
           qty: String(qty),
-          type: 'limit',
+          type,
           time_in_force: 'gtc',
-          limit_price: String(limitPrice),
+          ...(type === 'limit' ? { limit_price: String(limitPrice) } : {}),
           ...(clientOrderId ? { client_order_id: clientOrderId } : {}),
         },
       }),

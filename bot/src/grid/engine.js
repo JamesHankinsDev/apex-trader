@@ -300,15 +300,17 @@ export class GridEngine {
   }
 
   /**
-   * Handle a fill: update inventory, realize P&L on a completed round trip,
-   * and return the counter-order to rest.
+   * Update state from a fill: inventory in or out, and realized P&L on the
+   * closing leg. Submits nothing.
    *
-   * The counter-order carries the ORIGINAL quantity via counterOrderFor(),
-   * which is what keeps round trips matched when the grid re-sizes mid-run.
+   * Separate from onFill() so a polling loop has a SINGLE writer. The loop
+   * records fills for accounting and lets reconcile() place every order —
+   * if both submitted, each fill would get two counter-orders.
    *
    * @param {object} order  an Alpaca order object that has filled
+   * @returns {object|null} the counter-order descriptor, or null
    */
-  async onFill(order) {
+  recordFill(order) {
     const parsed = parseClientOrderId(order.client_order_id);
     if (!parsed) {
       this.logger.warn?.(`[grid] ignoring fill with untagged id ${order.client_order_id}`);
@@ -339,7 +341,19 @@ export class GridEngine {
       }
     }
 
-    const counter = counterOrderFor(fill, this.levels);
+    return counterOrderFor(fill, this.levels);
+  }
+
+  /**
+   * Record a fill AND rest its counter-order.
+   *
+   * The counter carries the ORIGINAL quantity via counterOrderFor(), which is
+   * what keeps round trips matched when the grid re-sizes mid-run.
+   *
+   * Use recordFill() instead inside a reconcile loop — see above.
+   */
+  async onFill(order) {
+    const counter = this.recordFill(order);
     if (!counter) return null;
 
     if (this.dryRun) return counter;

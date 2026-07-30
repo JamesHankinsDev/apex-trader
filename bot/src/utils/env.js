@@ -182,6 +182,12 @@ export function loadEnv() {
       maxDailyLossPct: pct('MAX_DAILY_LOSS_PCT', 0.05),
       /** Optional hard dollar floor, independent of equity. */
       maxDailyLossUsd: optionalNum('MAX_DAILY_LOSS_USD'),
+      /**
+       * Price stop, as a fraction below the band's lower bound. Rescales with
+       * the band, exactly like the bounds themselves. Opt-in: unset means the
+       * bot holds stranded inventory indefinitely rather than realizing a loss.
+       */
+      stopPct: optionalNum('GRID_STOP_PCT'),
     },
     runtime: {
       /** Defaults to true. Nothing is ever submitted until you opt out. */
