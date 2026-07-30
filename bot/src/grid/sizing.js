@@ -16,6 +16,8 @@ export const ANCHOR_MODE = Object.freeze({
   MANUAL: 'manual',
   /** Anchor is set once from market price at startup, then held. */
   SESSION: 'session',
+  /** Re-centres on price once drift is large AND no inventory is held. */
+  ON_FLAT: 'on_flat',
   /** Anchor follows price once it drifts far enough. The band chases. */
   ROLLING: 'rolling',
 });
@@ -41,6 +43,14 @@ function assert(condition, message) {
  *                      (isOutOfBand). That idling is a feature: it stops the
  *                      grid from buying all the way down a trend.
  *
+ *   on_flat            Re-centres on price after a large drift, but ONLY when
+ *                      no inventory is held. In a ranging market it closes
+ *                      out, re-centres and repeats, so it runs near
+ *                      continuously. If price gaps away and leaves it holding,
+ *                      it keeps the band — the held position still needs its
+ *                      exit levels — and idles until that closes. Keeps the
+ *                      brake; the cost is capital sitting idle.
+ *
  *   rolling            The band re-centres on price once drift exceeds
  *                      `reanchorDrift` x half-band. Price can never leave the
  *                      band, so the bot never idles — and in a sustained
@@ -53,8 +63,9 @@ function assert(condition, message) {
  * @param {number}  opts.price          current market price
  * @param {number} [opts.storedAnchor]  anchor persisted from a previous run
  * @param {number} [opts.manualAnchor]  required when mode is 'manual'
- * @param {number} [opts.bandPct]       half-width, needed for rolling drift
+ * @param {number} [opts.bandPct]       half-width, needed for drift modes
  * @param {number} [opts.reanchorDrift] fraction of half-band before re-anchor
+ * @param {number} [opts.openInventory] base qty held; gates on_flat
  * @returns {{ anchor: number, moved: boolean, reason: string }}
  */
 export function resolveAnchor({
@@ -64,6 +75,7 @@ export function resolveAnchor({
   manualAnchor,
   bandPct,
   reanchorDrift = 0.5,
+  openInventory = 0,
 }) {
   assert(Number.isFinite(price) && price > 0, `price must be positive, got ${price}.`);
 
@@ -82,10 +94,10 @@ export function resolveAnchor({
     return { anchor: price, moved: true, reason: 'anchored to market price at startup' };
   }
 
-  if (mode === ANCHOR_MODE.ROLLING) {
+  if (mode === ANCHOR_MODE.ON_FLAT || mode === ANCHOR_MODE.ROLLING) {
     assert(
       Number.isFinite(bandPct) && bandPct > 0,
-      'rolling anchor requires a positive bandPct.',
+      `${mode} anchor requires a positive bandPct.`,
     );
     assert(
       Number.isFinite(reanchorDrift) && reanchorDrift > 0 && reanchorDrift <= 1,
@@ -98,17 +110,30 @@ export function resolveAnchor({
 
     const drift = Math.abs(price - storedAnchor) / storedAnchor;
     const threshold = bandPct * reanchorDrift;
-    if (drift > threshold) {
+
+    if (drift <= threshold) {
       return {
-        anchor: price,
-        moved: true,
-        reason: `price drifted ${(drift * 100).toFixed(1)}% (> ${(threshold * 100).toFixed(1)}%) — re-anchored`,
+        anchor: storedAnchor,
+        moved: false,
+        reason: `drift ${(drift * 100).toFixed(1)}% within ${(threshold * 100).toFixed(1)}%`,
       };
     }
+
+    // on_flat keeps the brake: the band may only move once the previous one
+    // has been fully closed out. Holding inventory means the levels that would
+    // exit it still need to exist, so the band stays put and the bot idles.
+    if (mode === ANCHOR_MODE.ON_FLAT && openInventory > 0) {
+      return {
+        anchor: storedAnchor,
+        moved: false,
+        reason: `drifted ${(drift * 100).toFixed(1)}% but holding ${openInventory} — band held so inventory keeps its exit levels`,
+      };
+    }
+
     return {
-      anchor: storedAnchor,
-      moved: false,
-      reason: `drift ${(drift * 100).toFixed(1)}% within ${(threshold * 100).toFixed(1)}%`,
+      anchor: price,
+      moved: true,
+      reason: `price drifted ${(drift * 100).toFixed(1)}% (> ${(threshold * 100).toFixed(1)}%) — re-anchored`,
     };
   }
 
@@ -184,6 +209,7 @@ export function deriveGridConfig({
   storedAnchor,
   minOrderSize,
   buyingPower,
+  openInventory = 0,
 }) {
   const {
     symbol,
@@ -203,6 +229,7 @@ export function deriveGridConfig({
     manualAnchor,
     bandPct,
     reanchorDrift,
+    openInventory,
   });
 
   const { lowerBound, upperBound } = deriveBounds(anchorResult.anchor, bandPct);

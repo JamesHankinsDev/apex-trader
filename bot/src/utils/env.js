@@ -83,6 +83,16 @@ function pct(key, fallback) {
   return parsed;
 }
 
+/** Defaults to `fallback`; only an explicit false-y word turns it off. */
+function bool(key, fallback) {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const v = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+  if (['0', 'false', 'no', 'off'].includes(v)) return false;
+  throw new EnvError(`Env var ${key} must be true/false, got "${raw}".`);
+}
+
 function oneOf(key, allowed, fallback) {
   const value = optional(key, fallback);
   if (!allowed.includes(value)) {
@@ -154,8 +164,8 @@ export function loadEnv() {
       bandPct: pct('GRID_BAND_PCT', 0.15),
       /** Fraction of equity the grid may deploy at worst case. */
       allocationPct: pct('GRID_ALLOCATION_PCT', 0.8),
-      /** manual | session | rolling — see grid/sizing.js resolveAnchor(). */
-      anchorMode: oneOf('GRID_ANCHOR_MODE', ['manual', 'session', 'rolling'], 'session'),
+      /** manual | session | on_flat | rolling — see grid/sizing.js resolveAnchor(). */
+      anchorMode: oneOf('GRID_ANCHOR_MODE', ['manual', 'session', 'on_flat', 'rolling'], 'on_flat'),
       /** Required only when anchorMode is 'manual'. */
       manualAnchor: optionalNum('GRID_ANCHOR_PRICE'),
       /** rolling only: re-anchor once drift exceeds this fraction of half-band. */
@@ -174,6 +184,8 @@ export function loadEnv() {
       maxDailyLossUsd: optionalNum('MAX_DAILY_LOSS_USD'),
     },
     runtime: {
+      /** Defaults to true. Nothing is ever submitted until you opt out. */
+      dryRun: bool('DRY_RUN', true),
       pollIntervalMs: num('POLL_INTERVAL_MS', 5000),
       logLevel: optional('LOG_LEVEL', 'info'),
       apiPort: num('API_PORT', 4000),

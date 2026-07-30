@@ -1,17 +1,48 @@
 /* Apex Trader — grid engine.
 
-   Status: level calculation is implemented and testable. Order placement and
-   fill tracking are scaffolded with their intended shape and left as TODOs —
-   they need a live Alpaca client and are the next build step.
+   Model: a grid is N price levels spanning [lowerBound, upperBound].
 
-   Model: a grid is N price levels spanning [lowerBound, upperBound]. The
-   engine keeps a resting BUY at every level below current price and a resting
-   SELL at every level above it. When a BUY fills, a SELL is placed one level
-   up (and vice versa) — that round trip is the profit unit. */
+   The resting book is NOT simply "buys below, sells above" — that would place
+   sells for inventory you don't own. What actually rests is:
+
+     BUY   at each level below price that isn't already holding inventory
+     SELL  one level above each level that IS holding inventory
+
+   So a cold start from flat rests only buys. Sells appear as buys fill. That
+   distinction is why `assignSides()` (a display of the warmed-up shape) and
+   `desiredOrders()` (what to actually submit) are separate functions. */
 
 import { SPACING } from './config.js';
+import { counterOrderFor } from './rebalance.js';
 
 /** @typedef {{ index: number, price: number, side: 'buy'|'sell'|null }} GridLevel */
+
+/** Alpaca quotes USD pairs to the cent; crypto qty needs far more precision. */
+const PRICE_DP = 2;
+const QTY_DP = 9;
+const CLIENT_PREFIX = 'apex';
+
+const roundPrice = (p) => Number(p.toFixed(PRICE_DP));
+const roundQty = (q) => Number(q.toFixed(QTY_DP));
+
+/** BTC/USD -> BTCUSD, so it's safe inside a client_order_id. */
+const slug = (symbol) => symbol.replace(/[^A-Za-z0-9]/g, '');
+
+/**
+ * Orders are tagged with their level and side so a restart can rebuild state
+ * from the exchange rather than trusting local memory.
+ */
+export function buildClientOrderId(symbol, levelIndex, side, nonce) {
+  return `${CLIENT_PREFIX}-${slug(symbol)}-L${levelIndex}-${side}-${nonce}`;
+}
+
+/** @returns {{ levelIndex: number, side: string } | null} */
+export function parseClientOrderId(id) {
+  if (typeof id !== 'string' || !id.startsWith(`${CLIENT_PREFIX}-`)) return null;
+  const m = id.match(/-L(\d+)-(buy|sell)-/);
+  if (!m) return null;
+  return { levelIndex: Number(m[1]), side: m[2] };
+}
 
 /**
  * Compute the grid's price levels.
@@ -19,9 +50,8 @@ import { SPACING } from './config.js';
  * arithmetic — equal absolute gaps:  p_i = lower + i * (upper - lower)/(n-1)
  * geometric  — equal relative gaps:  p_i = lower * (upper/lower)^(i/(n-1))
  *
- * Geometric is usually the right default for crypto: a $500 move matters far
- * more at $20k than at $100k, and equal percentage steps keep the profit per
- * round trip constant across the band.
+ * Geometric is usually right for crypto: equal percentage steps keep the
+ * profit per round trip constant across the band.
  *
  * @param {object} cfg  normalized grid config
  * @returns {GridLevel[]} ascending by price, length === cfg.levels
@@ -43,8 +73,8 @@ export function calculateLevels(cfg) {
     }
   }
 
-  // Pin the endpoints exactly — floating-point drift over many multiplications
-  // can otherwise place the top level a few cents outside the configured band.
+  // Pin the endpoints exactly — drift over many multiplications can otherwise
+  // put the top level a few cents outside the configured band.
   out[0].price = lowerBound;
   out[levels - 1].price = upperBound;
 
@@ -52,12 +82,9 @@ export function calculateLevels(cfg) {
 }
 
 /**
- * Assign a side to each level given the current market price.
- * Levels below price rest as BUYs, levels above rest as SELLs. The level
- * nearest price gets no order — that's the spread the grid earns across.
+ * Display shape: what a fully warmed-up grid looks like at this price.
+ * Not what to submit — see desiredOrders().
  *
- * @param {GridLevel[]} levels  from calculateLevels
- * @param {number} price        current market price
  * @returns {GridLevel[]} new array; input is not mutated
  */
 export function assignSides(levels, price) {
@@ -65,7 +92,6 @@ export function assignSides(levels, price) {
     throw new TypeError(`assignSides requires a positive price, got ${price}.`);
   }
 
-  // The level closest to current price is left flat.
   let nearest = 0;
   let nearestDist = Infinity;
   for (const lvl of levels) {
@@ -87,12 +113,7 @@ export function isOutOfBand(cfg, price) {
   return price < cfg.lowerBound || price > cfg.upperBound;
 }
 
-/**
- * Gap to the adjacent level, used for hysteresis and for pricing the
- * counter-order after a fill.
- *
- * @returns {number} absolute price distance to the next level up
- */
+/** Absolute price distance to the next level up. */
 export function gapAt(levels, index) {
   const here = levels[index];
   const next = levels[index + 1] ?? levels[index - 1];
@@ -102,74 +123,293 @@ export function gapAt(levels, index) {
 export class GridEngine {
   /**
    * @param {object} opts
-   * @param {object} opts.config   normalized grid config
-   * @param {object} opts.client   Alpaca client (injected — keeps this testable)
-   * @param {object} [opts.logger] console-compatible logger
+   * @param {object} opts.config    normalized grid config
+   * @param {object} opts.client    Alpaca client (injected — keeps this testable)
+   * @param {boolean} [opts.dryRun] when true, reconcile plans but never submits
+   * @param {object} [opts.logger]
    */
-  constructor({ config, client, logger = console }) {
+  constructor({ config, client, dryRun = true, logger = console }) {
     this.config = config;
     this.client = client;
+    this.dryRun = dryRun;
     this.logger = logger;
 
     this.levels = calculateLevels(config);
-    /** @type {Map<number, object>} level index -> open order */
-    this.openOrders = new Map();
-    /** @type {object[]} completed fills, newest last */
+    this.orderSize = config.orderSize;
+
+    /** Buys awaiting a counter-sell. @type {Map<number, {qty:number, price:number}>} */
+    this.inventory = new Map();
+    /** Completed fills, newest last. */
     this.fills = [];
-    this.running = false;
+    this.realizedPnl = 0;
+    this.nonce = 0;
   }
 
-  /** Price levels with sides assigned for the given market price. */
+  /** Display plan — levels with sides assigned. */
   plan(price) {
     if (isOutOfBand(this.config, price)) return [];
     return assignSides(this.levels, price);
   }
 
-  /**
-   * Reconcile desired grid state against live orders: cancel what shouldn't
-   * be there, submit what's missing. Idempotent — safe to call every tick.
-   *
-   * TODO(order-placement): implement against the Alpaca client.
-   *   1. fetch open orders for config.symbol
-   *   2. diff against this.plan(price)
-   *   3. cancel orphans, submit missing limit orders at level prices
-   *   4. record submissions in this.openOrders
-   */
-  async reconcile(_price) {
-    throw new Error('GridEngine.reconcile is not implemented yet.');
-  }
-
-  /**
-   * Handle a fill: record it, then place the counter-order one level away.
-   *
-   * MUST use counterOrderFor() from ./rebalance.js to build the closing
-   * order. It carries the original fill's quantity, which is the invariant
-   * that keeps round trips matched when the grid re-sizes mid-run. Sizing a
-   * closing order from freshly derived numbers gets it rejected for
-   * insufficient position, because Alpaca does not allow shorting crypto.
-   *
-   * TODO(fill-tracking): implement.
-   *   1. push a normalized fill onto this.fills
-   *   2. clear this.openOrders for that level
-   *   3. submit counterOrderFor(fill, this.levels) — null at the band edge
-   *   4. emit realized PnL for the completed round trip
-   */
-  async onFill(_order) {
-    throw new Error('GridEngine.onFill is not implemented yet.');
-  }
-
-  /** Net base-asset quantity held from grid buys, used to gate rebalancing. */
+  /** Net base-asset quantity held from grid buys. */
   get openInventory() {
     let net = 0;
-    for (const f of this.fills) net += f.side === 'buy' ? f.qty : -f.qty;
-    return Math.max(0, net);
+    for (const { qty } of this.inventory.values()) net += qty;
+    return roundQty(net);
   }
 
-  /** Cancel every resting order and stop. */
+  /** New levels opened from here use this size. Closing orders are unaffected. */
+  applyResize(newSize) {
+    const previous = this.orderSize;
+    this.orderSize = newSize;
+    return { previous, current: newSize };
+  }
+
+  /**
+   * The orders that SHOULD be resting at this price.
+   *
+   * Sell targets are computed first and claim their level, so a buy is never
+   * planned at a price that an exit order already occupies.
+   *
+   * @returns {Array<{levelIndex:number, side:string, price:number, qty:number}>}
+   */
+  desiredOrders(price) {
+    if (isOutOfBand(this.config, price)) return [];
+
+    const orders = [];
+    const claimed = new Set();
+
+    // 1 — exits for everything currently held.
+    for (const [levelIndex, held] of this.inventory) {
+      const counter = counterOrderFor(
+        { levelIndex, side: 'buy', qty: held.qty, price: held.price },
+        this.levels,
+      );
+      if (!counter) continue; // held at the top of the band; nothing to close into
+      orders.push({
+        levelIndex: counter.levelIndex,
+        side: counter.side,
+        price: roundPrice(counter.price),
+        qty: roundQty(counter.qty),
+      });
+      claimed.add(counter.levelIndex);
+    }
+
+    // 2 — buys below price, skipping levels already holding or spoken for.
+    for (const lvl of this.levels) {
+      if (lvl.price >= price) continue;
+      if (this.inventory.has(lvl.index)) continue;
+      if (claimed.has(lvl.index)) continue;
+      orders.push({
+        levelIndex: lvl.index,
+        side: 'buy',
+        price: roundPrice(lvl.price),
+        qty: roundQty(this.orderSize),
+      });
+    }
+
+    return orders.sort((a, b) => a.levelIndex - b.levelIndex);
+  }
+
+  /** Identity of an order for diffing: same level, side, price and size. */
+  static keyOf(o) {
+    return `L${o.levelIndex}:${o.side}:${roundPrice(o.price)}:${roundQty(o.qty)}`;
+  }
+
+  /**
+   * Reconcile desired state against the live book: cancel what shouldn't be
+   * there, submit what's missing. Idempotent — safe to call every tick.
+   *
+   * Only touches orders carrying our client_order_id prefix, so anything you
+   * place by hand in the Alpaca UI is left alone.
+   *
+   * @param {number} price
+   * @returns {Promise<{submitted:Array, cancelled:Array, kept:number, dryRun:boolean, skipped?:string}>}
+   */
+  async reconcile(price) {
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new TypeError(`reconcile requires a positive price, got ${price}.`);
+    }
+
+    if (isOutOfBand(this.config, price)) {
+      // Cancel everything but place nothing — the grid idles out of band.
+      const live = await this.#ourOpenOrders();
+      const cancelled = await this.#cancelAll(live);
+      return { submitted: [], cancelled, kept: 0, dryRun: this.dryRun, skipped: 'out of band' };
+    }
+
+    const desired = this.desiredOrders(price);
+    const live = await this.#ourOpenOrders();
+
+    const desiredByKey = new Map(desired.map((d) => [GridEngine.keyOf(d), d]));
+    const liveByKey = new Map();
+    const orphans = [];
+
+    for (const order of live) {
+      const parsed = parseClientOrderId(order.client_order_id);
+      if (!parsed) {
+        orphans.push(order);
+        continue;
+      }
+      const key = GridEngine.keyOf({
+        levelIndex: parsed.levelIndex,
+        side: parsed.side,
+        price: Number(order.limit_price),
+        qty: Number(order.qty),
+      });
+      if (liveByKey.has(key)) orphans.push(order); // exact duplicate
+      else liveByKey.set(key, order);
+    }
+
+    const toCancel = [...orphans];
+    for (const [key, order] of liveByKey) {
+      if (!desiredByKey.has(key)) toCancel.push(order);
+    }
+    const toSubmit = desired.filter((d) => !liveByKey.has(GridEngine.keyOf(d)));
+
+    if (this.dryRun) {
+      return {
+        submitted: toSubmit,
+        cancelled: toCancel,
+        kept: liveByKey.size - (toCancel.length - orphans.length),
+        dryRun: true,
+      };
+    }
+
+    // Cancel before submitting, so freed buying power is available.
+    const cancelled = await this.#cancelAll(toCancel);
+
+    const submitted = [];
+    for (const o of toSubmit) {
+      try {
+        const res = await this.client.submitOrder({
+          symbol: this.config.symbol,
+          side: o.side,
+          qty: o.qty,
+          limitPrice: o.price,
+          clientOrderId: buildClientOrderId(this.config.symbol, o.levelIndex, o.side, ++this.nonce),
+        });
+        submitted.push(res);
+      } catch (err) {
+        // One rejected level must not abort the whole reconcile pass.
+        this.logger.warn?.(`[grid] level ${o.levelIndex} ${o.side} rejected: ${err.message}`);
+      }
+    }
+
+    return { submitted, cancelled, kept: liveByKey.size - cancelled.length, dryRun: false };
+  }
+
+  /**
+   * Handle a fill: update inventory, realize P&L on a completed round trip,
+   * and return the counter-order to rest.
+   *
+   * The counter-order carries the ORIGINAL quantity via counterOrderFor(),
+   * which is what keeps round trips matched when the grid re-sizes mid-run.
+   *
+   * @param {object} order  an Alpaca order object that has filled
+   */
+  async onFill(order) {
+    const parsed = parseClientOrderId(order.client_order_id);
+    if (!parsed) {
+      this.logger.warn?.(`[grid] ignoring fill with untagged id ${order.client_order_id}`);
+      return null;
+    }
+
+    const { levelIndex, side } = parsed;
+    const qty = roundQty(Number(order.filled_qty ?? order.qty));
+    const price = Number(order.filled_avg_price ?? order.limit_price);
+
+    const fill = { levelIndex, side, qty, price, at: order.filled_at ?? null };
+    this.fills.push(fill);
+
+    if (side === 'buy') {
+      this.inventory.set(levelIndex, { qty, price });
+    } else {
+      // A sell at level i closes the buy that was opened at level i-1.
+      const openedAt = levelIndex - 1;
+      const held = this.inventory.get(openedAt);
+      if (held) {
+        const pnl = qty * (price - held.price);
+        this.realizedPnl += pnl;
+        fill.realizedPnl = pnl;
+        fill.closedLevel = openedAt;
+        this.inventory.delete(openedAt);
+      } else {
+        this.logger.warn?.(`[grid] sell filled at level ${levelIndex} with no matching buy at ${openedAt}`);
+      }
+    }
+
+    const counter = counterOrderFor(fill, this.levels);
+    if (!counter) return null;
+
+    if (this.dryRun) return counter;
+
+    try {
+      return await this.client.submitOrder({
+        symbol: this.config.symbol,
+        side: counter.side,
+        qty: roundQty(counter.qty),
+        limitPrice: roundPrice(counter.price),
+        clientOrderId: buildClientOrderId(
+          this.config.symbol,
+          counter.levelIndex,
+          counter.side,
+          ++this.nonce,
+        ),
+      });
+    } catch (err) {
+      this.logger.warn?.(`[grid] counter-order at level ${counter.levelIndex} rejected: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Rebuild local state from the exchange, so a restart doesn't lose track of
+   * which levels are holding inventory.
+   */
+  async hydrate() {
+    const orders = await this.client.getOrders({ status: 'all', limit: 500 });
+    this.inventory.clear();
+
+    for (const o of orders) {
+      const parsed = parseClientOrderId(o.client_order_id);
+      if (!parsed || o.status !== 'filled') continue;
+      const qty = roundQty(Number(o.filled_qty ?? o.qty));
+      const price = Number(o.filled_avg_price ?? o.limit_price);
+      if (parsed.side === 'buy') this.inventory.set(parsed.levelIndex, { qty, price });
+      else this.inventory.delete(parsed.levelIndex - 1);
+    }
+
+    return this.openInventory;
+  }
+
+  /** Cancel every resting order this engine placed, then stop. */
   async shutdown() {
-    this.running = false;
-    this.logger.info?.('[grid] shutdown requested');
-    // TODO: cancel all open orders for config.symbol before returning.
+    const live = await this.#ourOpenOrders();
+    const cancelled = await this.#cancelAll(live);
+    this.logger.info?.(`[grid] shutdown — ${cancelled.length} order(s) cancelled`);
+    return cancelled;
+  }
+
+  async #ourOpenOrders() {
+    const orders = await this.client.getOrders({ status: 'open', limit: 500 });
+    return orders.filter(
+      (o) => o.symbol === this.config.symbol && String(o.client_order_id ?? '').startsWith(`${CLIENT_PREFIX}-`),
+    );
+  }
+
+  async #cancelAll(orders) {
+    if (this.dryRun) return orders;
+    const done = [];
+    for (const o of orders) {
+      try {
+        await this.client.cancelOrder(o.id);
+        done.push(o);
+      } catch (err) {
+        this.logger.warn?.(`[grid] could not cancel ${o.id}: ${err.message}`);
+      }
+    }
+    return done;
   }
 }
 

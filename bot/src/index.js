@@ -110,11 +110,11 @@ async function main() {
   console.log(`  stop      $${fmt(risk.maxDailyLossUsd)}/day via ${risk.source}`);
   console.log(`\n  ${cfg.levels} levels · ${cfg.spacing} spacing\n`);
 
-  const engine = new GridEngine({ config: cfg, client });
+  const engine = new GridEngine({ config: cfg, client, dryRun: env.runtime.dryRun });
   printGrid(engine, cfg, price);
 
   if (isOutOfBand(cfg, price)) {
-    console.warn('\n  ⚠️  price is outside the band — the grid would idle.');
+    console.warn('\n  ⚠️  price is outside the band — the grid idles.');
   }
 
   // Persist the anchor so a restart doesn't silently re-centre the grid.
@@ -122,8 +122,31 @@ async function main() {
     writeAnchor(symbol, d.anchor, { mode: env.ratios.anchorMode, price });
   }
 
-  console.log('\n  Dry run only. Implement GridEngine.reconcile() and onFill()');
-  console.log('  in src/grid/engine.js to enable live trading.\n');
+  // ---- reconcile ---------------------------------------------------------
+  await engine.hydrate();
+  if (engine.openInventory > 0) {
+    console.log(`\n  holding ${engine.openInventory} from ${engine.inventory.size} level(s)`);
+  }
+
+  const result = await engine.reconcile(price);
+
+  console.log(`\n  ${env.runtime.dryRun ? 'WOULD submit' : 'submitted'} ${result.submitted.length} order(s)` +
+    `, ${env.runtime.dryRun ? 'would cancel' : 'cancelled'} ${result.cancelled.length}` +
+    (result.skipped ? `  (${result.skipped})` : ''));
+
+  for (const o of result.submitted.slice(0, 8)) {
+    const side = (o.side ?? '').toUpperCase().padEnd(4);
+    console.log(`    ${side} ${o.qty ?? ''} @ $${fmt(Number(o.price ?? o.limitPrice ?? 0))}`);
+  }
+  if (result.submitted.length > 8) {
+    console.log(`    … ${result.submitted.length - 8} more`);
+  }
+
+  if (env.runtime.dryRun) {
+    console.log('\n  DRY_RUN is on — nothing was sent. Set DRY_RUN=false to place orders.\n');
+  } else {
+    console.log('');
+  }
 }
 
 main().catch((err) => {

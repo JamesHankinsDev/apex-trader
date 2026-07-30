@@ -125,6 +125,49 @@ test('rolling re-anchors downward too — this is the averaging-down risk', () =
   assert.equal(r.anchor, price, 'band follows price down, so the bot never idles');
 });
 
+test('on_flat re-centres when flat and drift is large', () => {
+  const price = 64000 * 1.09; // 9% > 7.5% threshold
+  const r = resolveAnchor({
+    mode: ANCHOR_MODE.ON_FLAT,
+    price,
+    storedAnchor: 64000,
+    bandPct: 0.15,
+    reanchorDrift: 0.5,
+    openInventory: 0,
+  });
+  assert.equal(r.anchor, price);
+  assert.equal(r.moved, true);
+});
+
+test('on_flat holds the band while inventory is open', () => {
+  const r = resolveAnchor({
+    mode: ANCHOR_MODE.ON_FLAT,
+    price: 64000 * 0.8, // way out of band, a big drop
+    storedAnchor: 64000,
+    bandPct: 0.15,
+    reanchorDrift: 0.5,
+    openInventory: 0.0005,
+  });
+  assert.equal(r.anchor, 64000, 'held inventory keeps its exit levels');
+  assert.equal(r.moved, false);
+  assert.match(r.reason, /holding/);
+});
+
+test('on_flat and rolling differ ONLY when holding inventory', () => {
+  const shared = { price: 64000 * 0.8, storedAnchor: 64000, bandPct: 0.15, reanchorDrift: 0.5 };
+
+  // Flat: identical behaviour.
+  const flatA = resolveAnchor({ ...shared, mode: ANCHOR_MODE.ON_FLAT, openInventory: 0 });
+  const flatB = resolveAnchor({ ...shared, mode: ANCHOR_MODE.ROLLING, openInventory: 0 });
+  assert.equal(flatA.anchor, flatB.anchor);
+
+  // Holding: on_flat brakes, rolling chases price down.
+  const heldA = resolveAnchor({ ...shared, mode: ANCHOR_MODE.ON_FLAT, openInventory: 0.5 });
+  const heldB = resolveAnchor({ ...shared, mode: ANCHOR_MODE.ROLLING, openInventory: 0.5 });
+  assert.equal(heldA.anchor, 64000, 'on_flat holds');
+  assert.equal(heldB.anchor, shared.price, 'rolling follows price down');
+});
+
 test('unknown anchor mode is rejected', () => {
   assert.throws(() => resolveAnchor({ mode: 'drift', price: 100 }), SizingError);
 });

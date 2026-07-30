@@ -83,11 +83,16 @@ Equity, buying power, market price, and the exchange's `min_order_size` are all 
 
 | Mode | Band | Consequence |
 |---|---|---|
-| `session` *(default)* | fixed after first run | price can leave it → bot idles |
+| `on_flat` *(default)* | re-centres, but only when flat | runs continuously while ranging; idles while holding out-of-band |
+| `session` | fixed after first run | price can leave it → bot idles |
 | `manual` | pinned to `GRID_ANCHOR_PRICE` | same, at a price you choose |
-| `rolling` | re-centres on price | **bot never idles — averages down forever in a downtrend** |
+| `rolling` | re-centres on price, always | **never idles — averages down forever in a downtrend** |
 
-The idling in `session`/`manual` is the feature. It's what stops the grid buying all the way down a trend. `rolling` removes that brake: because the band chases price, `isOutOfBand()` never fires. That is the classic way grid bots blow up. If you use it, pair it with a tight `MAX_DAILY_LOSS_PCT` and an exit plan.
+The idling is the feature. It's what stops the grid buying all the way down a trend. `rolling` removes that brake: because the band chases price, `isOutOfBand()` never fires. That is the classic way grid bots blow up. If you use it, pair it with a tight `MAX_DAILY_LOSS_PCT` and an exit plan.
+
+`on_flat` is the middle path and the default. It re-centres readily — but only once the previous band has been fully closed out, because held inventory still needs the exit levels that would disappear. In a ranging market it closes out, re-centres and repeats. If price gaps away while it's holding, it keeps the band and idles until that position closes. The cost is capital sitting idle; the benefit is that it never averages into a fall.
+
+`on_flat` and `rolling` are *identical* when flat. They differ only while holding — there's a test asserting exactly that.
 
 The anchor is persisted to `bot/state/anchor.json` (gitignored) so a restart doesn't silently re-centre a `session` grid.
 
@@ -113,7 +118,20 @@ Set `GRID_LOWER_BOUND`, `GRID_UPPER_BOUND`, **and** `GRID_ORDER_SIZE` together t
 
 ## Known gaps
 
-**1. Grid engine is partially implemented.** `calculateLevels()`, `assignSides()`, and validation are done and tested. `GridEngine.reconcile()` and `GridEngine.onFill()` throw — they need a live Alpaca client. This is the next build step.
+**1. Nothing has traded yet.** `reconcile()` and `onFill()` are implemented and tested, but `DRY_RUN` defaults to **true** even when unset — the bot plans the book and reports it, and submits nothing. Set `DRY_RUN=false` to place real (paper) orders.
+
+There is also no run loop yet: `npm run bot` reconciles once and exits. Continuous operation needs a poll loop around `reconcile()` plus a fill stream.
+
+### What actually rests
+
+The book is *not* "buys below, sells above" — that would place sells for inventory you don't own. What rests is:
+
+- **BUY** at each level below price not already holding inventory
+- **SELL** one level above each level that *is* holding inventory
+
+So a cold start from flat rests **only buys**; sells appear as buys fill. `assignSides()` shows the warmed-up shape for display, `desiredOrders()` decides what to actually submit — they are deliberately different functions.
+
+Orders are tagged with a `client_order_id` of the form `apex-BTCUSD-L7-sell-42`, so `reconcile()` only ever touches its own orders (anything you place by hand in the Alpaca UI is left alone) and `hydrate()` can rebuild inventory from exchange history after a restart.
 
 **2. The prototype UI runs, but on mock data.** `npm run dashboard` then open **http://localhost:3000/prototype**.
 

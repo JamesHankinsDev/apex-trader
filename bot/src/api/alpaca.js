@@ -84,6 +84,28 @@ export function createClient(cfg) {
     getOrders: (opts = {}) =>
       request('/v2/orders', { query: { status: 'open', limit: 100, ...opts } }),
 
+    /**
+     * Submit a resting limit order.
+     * GTC because grid levels are meant to sit until price reaches them.
+     *
+     * @param {object} o  { symbol, side, qty, limitPrice, clientOrderId }
+     */
+    submitOrder: ({ symbol, side, qty, limitPrice, clientOrderId }) =>
+      request('/v2/orders', {
+        method: 'POST',
+        body: {
+          symbol,
+          side,
+          qty: String(qty),
+          type: 'limit',
+          time_in_force: 'gtc',
+          limit_price: String(limitPrice),
+          ...(clientOrderId ? { client_order_id: clientOrderId } : {}),
+        },
+      }),
+
+    cancelOrder: (id) => request(`/v2/orders/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
     /** Market clock — crypto trades 24/7, but useful for equities parity. */
     getClock: () => request('/v2/clock'),
 
