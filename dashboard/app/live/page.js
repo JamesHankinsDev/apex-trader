@@ -66,10 +66,53 @@ function Tile({ label, value, sub, tone, footer }) {
 }
 
 const CAPITAL = [
-  { key: 'cash', label: 'cash', hint: 'spendable', color: 'var(--violet-200)' },
+  { key: 'cash', label: 'cash', hint: 'spendable now', color: 'var(--violet-200)' },
   { key: 'pendingValue', label: 'pending', hint: 'reserved by resting buys', color: 'var(--violet-400)' },
   { key: 'heldValue', label: 'held', hint: 'BTC you own', color: 'var(--violet-600)' },
 ];
+
+/** What each slice is actually made of, for the hover detail. */
+function capitalDetail(key, snapshot) {
+  const price = snapshot?.market?.price ?? 0;
+
+  if (key === 'pendingValue') {
+    const buys = (snapshot?.book ?? []).filter((o) => o.side === 'buy');
+    if (!buys.length) return { rows: [], note: 'No buy orders resting.' };
+    return {
+      note: `${buys.length} resting bid${buys.length > 1 ? 's' : ''} — cash is held until each fills or is cancelled.`,
+      rows: buys
+        .sort((a, b) => b.price - a.price)
+        .map((o) => ({
+          left: `L${o.levelIndex}`,
+          mid: `$${money(o.price)}`,
+          right: `$${money(o.qty * o.price)}`,
+          note: `${(((o.price / price) - 1) * 100).toFixed(2)}% from spot`,
+        })),
+    };
+  }
+
+  if (key === 'heldValue') {
+    const lots = snapshot?.position?.heldLevels ?? [];
+    if (!lots.length) return { rows: [], note: 'Holding nothing — all capital is in cash.' };
+    return {
+      note: `${lots.length} lot${lots.length > 1 ? 's' : ''} — each exits one level above its entry.`,
+      rows: lots
+        .sort((a, b) => b.price - a.price)
+        .map((h) => {
+          const now = h.qty * price;
+          const cost = h.qty * h.price;
+          return {
+            left: `L${h.levelIndex}`,
+            mid: `entry $${money(h.price)}`,
+            right: `$${money(now)}`,
+            note: `${now >= cost ? '+' : '−'}$${money(Math.abs(now - cost), 4)} unrealised`,
+          };
+        }),
+    };
+  }
+
+  return { rows: [], note: 'Uncommitted. This is what the next buy order can draw on.' };
+}
 
 /**
  * Equity is NOT cash + holdings. Alpaca reports `cash` net of order
@@ -81,13 +124,28 @@ const CAPITAL = [
  * deficiency cannot scramble it. Every segment is labelled with its own value,
  * so colour is reinforcement only.
  */
-function CapitalSplit({ account }) {
+function CapitalSplit({ snapshot }) {
+  const account = snapshot?.account;
+  const [active, setActive] = useState(null);
   if (!account) return null;
+
   const total = CAPITAL.reduce((sum, p) => sum + Number(account[p.key] ?? 0), 0);
   if (!(total > 0)) return null;
 
+  const shown = CAPITAL.find((p) => p.key === active);
+  const detail = shown ? capitalDetail(shown.key, snapshot) : null;
+
+  // Hover AND focus, so the detail is reachable without a mouse.
+  const bind = (key) => ({
+    tabIndex: 0,
+    onMouseEnter: () => setActive(key),
+    onMouseLeave: () => setActive((k) => (k === key ? null : k)),
+    onFocus: () => setActive(key),
+    onBlur: () => setActive((k) => (k === key ? null : k)),
+  });
+
   return (
-    <div style={{ marginTop: 10 }}>
+    <div style={{ marginTop: 10, position: 'relative' }}>
       <div
         role="img"
         aria-label={CAPITAL.map((p) => `${p.label} $${money(account[p.key] ?? 0)}`).join(', ')}
@@ -99,10 +157,15 @@ function CapitalSplit({ account }) {
           return (
             <div
               key={p.key}
+              {...bind(p.key)}
+              aria-label={`${p.label} $${money(v)}`}
               style={{
                 width: `${(v / total) * 100}%`,
                 background: p.color,
                 borderRadius: 'var(--radius-pill)',
+                cursor: 'help',
+                // The bar is 6px; pad the hit target out to a usable size.
+                boxShadow: active === p.key ? '0 0 0 2px var(--brand-border)' : 'none',
               }}
             />
           );
@@ -111,7 +174,20 @@ function CapitalSplit({ account }) {
 
       <dl style={{ margin: 0, display: 'grid', gap: 3 }}>
         {CAPITAL.map((p) => (
-          <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <div
+            key={p.key}
+            {...bind(p.key)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+              cursor: 'help',
+              borderRadius: 4,
+              padding: '1px 3px',
+              margin: '0 -3px',
+              background: active === p.key ? 'var(--bg-raised)' : 'transparent',
+            }}
+          >
             <span
               aria-hidden="true"
               style={{ width: 8, height: 8, flex: 'none', borderRadius: 2, background: p.color }}
@@ -126,6 +202,58 @@ function CapitalSplit({ account }) {
           </div>
         ))}
       </dl>
+
+      {shown && (
+        <div
+          role="tooltip"
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            marginTop: 8,
+            zIndex: 20,
+            minWidth: 260,
+            padding: '10px 12px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-strong)',
+            background: 'var(--bg-elevated)',
+            boxShadow: 'var(--shadow-pop)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+            <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2, background: shown.color }} />
+            <span style={{ font: '600 12px var(--font-sans)', color: 'var(--text-900)' }}>
+              {shown.label} · ${money(account[shown.key] ?? 0)}
+            </span>
+          </div>
+          <div style={{ font: '11px var(--font-sans)', color: 'var(--text-500)', marginBottom: detail.rows.length ? 8 : 0 }}>
+            {detail.note}
+          </div>
+          {detail.rows.map((r) => (
+            <div
+              key={r.left + r.mid}
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 8,
+                font: '12px var(--font-mono)',
+                color: 'var(--text-700)',
+                padding: '3px 0',
+                borderTop: '1px solid var(--border-soft)',
+              }}
+            >
+              <span style={{ color: 'var(--text-400)', minWidth: 22 }}>{r.left}</span>
+              <span>{r.mid}</span>
+              <span style={{ marginLeft: 'auto' }}>{r.right}</span>
+            </div>
+          ))}
+          {detail.rows.length > 0 && (
+            <div style={{ font: '11px var(--font-sans)', color: 'var(--text-400)', marginTop: 6 }}>
+              {detail.rows.map((r) => r.note).join(' · ')}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -401,7 +529,7 @@ export default function Live() {
           <Tile
             label="Equity"
             value={s?.account ? `$${money(s.account.equity)}` : '—'}
-            footer={<CapitalSplit account={s?.account} />}
+            footer={<CapitalSplit snapshot={s} />}
           />
           <Tile
             label="Realized P&L"
