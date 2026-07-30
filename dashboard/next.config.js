@@ -2,21 +2,11 @@
 const nextConfig = {
   reactStrictMode: true,
 
-  env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000',
-  },
-
-  // Proxy dashboard API calls to the bot process so the browser stays
-  // same-origin and no CORS config is needed on the bot side.
-  async rewrites() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
-    return [
-      {
-        source: '/api/bot/:path*',
-        destination: `${apiUrl}/:path*`,
-      },
-    ];
-  },
+  // NOTE: there is deliberately no rewrite to the bot here. A rewrite is a
+  // transparent proxy — it cannot attach the bot's API_TOKEN, so it would
+  // either bypass auth or fail. app/api/bot/[...path]/route.js does the
+  // proxying instead, adding the token server-side where the browser can't
+  // see it. BOT_API_URL and BOT_API_TOKEN are server-only on purpose.
 };
 
 module.exports = nextConfig;

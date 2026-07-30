@@ -20,6 +20,7 @@ apex-trader/
 │   │   │   └── engine.js     # levels, desired book, reconcile, fills
 │   │   ├── api/
 │   │   │   ├── alpaca.js     # REST client over fetch
+│   │   │   ├── server.js     # read-only dashboard API
 │   │   │   └── check-account.js
 │   │   ├── data/             # market data adapters — empty
 │   │   ├── logging/          # structured logging — empty
@@ -27,10 +28,12 @@ apex-trader/
 │   │       ├── env.js        # env loading + safety interlocks
 │   │       └── state.js      # anchor persistence
 │   ├── backtest/             # backtest harness — empty
-│   └── tests/                # 75 tests
+│   └── tests/                # 84 tests
 ├── dashboard/                # Next.js 15 App Router
 │   ├── app/
 │   │   ├── page.js           # build-status shell
+│   │   ├── live/page.js      # live bot monitor
+│   │   ├── api/bot/          # server-side proxy (holds BOT_API_TOKEN)
 │   │   ├── layout.js
 │   │   └── globals.css       # design tokens (mirrored from the design system)
 │   └── public/prototype/     # vendored Claude Design build — runs as-is
@@ -80,6 +83,64 @@ Each tick: read live state → check stops → ingest fills → maybe resize →
 Ordering inside a tick is deliberate: **stops are evaluated before anything is placed**, so a breached limit can never be followed by fresh exposure in the same pass. `reconcile()` is the only thing that submits grid orders — fills are recorded via `recordFill()` for accounting and never re-submitted, otherwise every fill would get two counter-orders.
 
 A failed tick is logged and retried rather than killing the process, so a transient 502 doesn't stop an unattended bot. Ctrl-C cancels resting orders before exiting: with the bot stopped nothing would place a counter-order against a fill, so leaving the book resting would let a buy fill with no exit behind it.
+
+## Dashboard API
+
+`npm run bot:loop` also serves a read-only API on `API_PORT` (default 4000), and the dashboard's `/live` page polls it every 2s.
+
+| Route | Returns |
+|---|---|
+| `/health` | running, halted, dryRun, ticks, uptime — **always open**, for platform probes |
+| `/state` | full snapshot: account, market, grid, position, book, ladder, fills |
+| `/grid` | config + ladder + desired book |
+| `/position` | inventory, held levels, realized P&L |
+| `/fills` | last 50 fills |
+
+Three properties worth knowing:
+
+**It never calls Alpaca.** Every route serves the Runner's in-memory snapshot, so the dashboard can poll hard without burning rate limit or racing a tick. The loop is the only thing that talks to the exchange.
+
+**It is read-only.** Every route is GET; anything else returns 405. There is no endpoint that places, cancels, or modifies an order — a compromised dashboard cannot move money. A test asserts `/submit`, `/cancel`, `/liquidate` and `/halt` all 404.
+
+**Binding fails safe.** Without `API_TOKEN` the server binds `127.0.0.1` only and *ignores* a request to bind elsewhere. Set a token to expose it.
+
+The dashboard reaches it through `app/api/bot/[...path]/route.js`, a server-side proxy holding `BOT_API_TOKEN`. That's deliberately not a Next rewrite: a rewrite is a transparent proxy and can't attach a header, so it would either bypass auth or fail. The token is server-only and never reaches the browser.
+
+## Deploying
+
+**Yes — Railway for the bot, Vercel for the dashboard.** The bot cannot be serverless: a grid needs a process that stays up between ticks, holds inventory state, and cancels its book on shutdown. Vercel functions are ephemeral, so the bot needs a long-running host (Railway, Fly, Render, or a VPS). The dashboard is a normal Next app and Vercel is a good fit.
+
+```
+Railway ──────────────┐          ┌───────────── Vercel
+  bot:loop            │          │   Next dashboard
+  ├─ run loop ────────┼─ Alpaca  │   ├─ /live (browser polls same-origin)
+  └─ API :4000  ◄─────┼──────────┼── └─ /api/bot/* (adds BOT_API_TOKEN here)
+     (API_TOKEN)      │          │
+     + volume for     │          │   BOT_API_URL, BOT_API_TOKEN
+       bot/state/     │          │   are SERVER-ONLY (no NEXT_PUBLIC_)
+```
+
+Three things will bite you if you skip them:
+
+**1. Exactly one instance.** Two replicas both run `reconcile()` against the same account, so every level gets two orders and every fill two counter-orders. Pin replicas to 1. Also mind rolling deploys — if the platform starts the new container before stopping the old one, they overlap and you get double orders for that window. Prefer a stop-then-start deploy strategy.
+
+**2. `bot/state/` must be a persistent volume.** The anchor lives in `bot/state/anchor.json`. Container filesystems are ephemeral, so without a mounted volume every redeploy silently re-centres the grid on whatever price it restarts at — including while holding inventory, which is exactly what `on_flat` exists to prevent. Mount a volume at `bot/state`, or move the anchor into a database.
+
+**3. Set `API_TOKEN`.** Without it the API refuses to bind publicly, so the dashboard on Vercel simply can't reach it. With it, generate a real random value and set the matching `BOT_API_TOKEN` on Vercel.
+
+Environment split:
+
+| Railway (bot) | Vercel (dashboard) |
+|---|---|
+| `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY` | `BOT_API_URL` — the Railway public URL |
+| `TRADING_MODE`, `DRY_RUN` | `BOT_API_TOKEN` — matches the bot's `API_TOKEN` |
+| `GRID_*`, `MAX_DAILY_LOSS_PCT` | |
+| `API_TOKEN`, `API_HOST=0.0.0.0` | |
+| `DASHBOARD_ORIGIN` — your Vercel URL | |
+
+Alpaca keys never go near Vercel. The dashboard only ever talks to the bot.
+
+Point the platform's health check at `/health`, which stays open without the token.
 
 ## Grid strategy
 
@@ -218,6 +279,6 @@ Upstream source: `claude.ai/design/p/0dc922ad-d90b-49a0-82c3-a20c7a389ff4`. A se
 - [ ] Alpaca client + account smoke test (credentials still unverified)
 - [x] Order placement + fill tracking
 - [x] Run loop + daily and price stops
-- [ ] Dashboard API endpoints
+- [x] Dashboard API endpoints + live monitor page
 - [ ] Port prototype components to ES modules, on real data
 - [ ] 6-month backtest harness

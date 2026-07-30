@@ -59,6 +59,26 @@ export default function Home() {
         </p>
 
         <a
+          href="/live"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 12,
+            marginRight: 10,
+            padding: '10px 14px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--brand)',
+            background: 'var(--brand)',
+            font: '600 13px var(--font-sans)',
+            color: 'var(--brand-contrast)',
+            boxShadow: 'var(--glow-brand)',
+          }}
+        >
+          Watch the bot live
+        </a>
+
+        <a
           href="/prototype"
           style={{
             display: 'inline-flex',

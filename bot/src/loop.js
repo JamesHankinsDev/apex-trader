@@ -12,6 +12,7 @@ import { createClient, AlpacaError } from './api/alpaca.js';
 import { GridConfigError } from './grid/config.js';
 import { SizingError } from './grid/sizing.js';
 import { Runner, HALT } from './runner.js';
+import { createApiServer } from './api/server.js';
 
 const HALT_MESSAGE = {
   [HALT.DAILY_LOSS]: 'daily loss limit reached — resting orders cancelled, position kept',
@@ -36,12 +37,23 @@ async function main() {
     console.log(`\n  ⚠️  LIVE ORDERS ENABLED on the ${env.tradingMode} account.\n`);
   }
 
+  const api = createApiServer({
+    runner,
+    port: env.runtime.apiPort,
+    token: env.runtime.apiToken,
+    host: env.runtime.apiHost,
+    corsOrigin: env.runtime.corsOrigin,
+  });
+  await api.start();
+  console.log('');
+
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n  ${signal} — stopping.`);
     runner.running = false;
+    await api.stop().catch(() => {});
     try {
       if (runner.engine && !env.runtime.dryRun) {
         const cancelled = await runner.engine.shutdown();

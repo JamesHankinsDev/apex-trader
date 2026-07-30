@@ -45,8 +45,71 @@ export class Runner {
     this.running = false;
     this.halted = null;
     this.ticks = 0;
+    this.startedAt = Date.now();
+    this.lastTick = null;
+    this.lastError = null;
     /** Order ids already accounted for, so fills are recorded once. */
     this.seenFills = new Set();
+  }
+
+  /**
+   * Everything the dashboard needs, from memory. Deliberately does NOT call
+   * Alpaca: the loop is the only thing that talks to the exchange, so the API
+   * can be polled hard without burning rate limit or racing a tick.
+   */
+  snapshot() {
+    const e = this.engine;
+    const t = this.lastTick;
+
+    return {
+      status: {
+        running: this.running,
+        halted: this.halted,
+        dryRun: this.dryRun,
+        mode: this.env.tradingMode,
+        symbol: this.symbol,
+        ticks: this.ticks,
+        uptimeMs: Date.now() - this.startedAt,
+        lastTickAt: t?.at ?? null,
+        lastError: this.lastError,
+      },
+      account: t
+        ? { equity: t.equity, dailyPnl: t.dailyPnl, lossLimit: t.lossLimit }
+        : null,
+      market: t ? { price: t.price, idle: t.idle } : null,
+      grid: e
+        ? {
+            lowerBound: e.config.lowerBound,
+            upperBound: e.config.upperBound,
+            levels: e.config.levels,
+            spacing: e.config.spacing,
+            orderSize: e.orderSize,
+            anchorMode: this.env.ratios.anchorMode,
+            stopPrice: t?.stopPrice ?? null,
+          }
+        : null,
+      position: e
+        ? {
+            inventory: e.openInventory,
+            heldLevels: [...e.inventory.entries()].map(([levelIndex, h]) => ({
+              levelIndex,
+              qty: h.qty,
+              price: h.price,
+            })),
+            realizedPnl: e.realizedPnl,
+            roundTrips: e.fills.filter((f) => f.realizedPnl !== undefined).length,
+          }
+        : null,
+      book: e && t ? e.desiredOrders(t.price) : [],
+      ladder: e
+        ? e.levels.map((l) => ({
+            index: l.index,
+            price: l.price,
+            held: e.inventory.has(l.index),
+          }))
+        : [],
+      fills: e ? e.fills.slice(-50).reverse() : [],
+    };
   }
 
   /** Mid price from a crypto quote. */
@@ -195,6 +258,14 @@ export class Runner {
     // 1 — daily loss. Checked before anything is placed.
     if (live.dailyPnl <= risk.maxDailyLossUsd) {
       await this.halt(HALT.DAILY_LOSS);
+      this.lastTick = {
+        ...(this.lastTick ?? {}),
+        at: Date.now(),
+        equity: live.equity,
+        price: live.price,
+        dailyPnl: live.dailyPnl,
+        lossLimit: risk.maxDailyLossUsd,
+      };
       return {
         halted: HALT.DAILY_LOSS,
         dailyPnl: live.dailyPnl,
@@ -261,8 +332,9 @@ export class Runner {
     // 5 — bring the book in line.
     const result = await this.engine.reconcile(live.price);
 
-    return {
+    const summary = {
       tick: this.ticks,
+      at: Date.now(),
       price: live.price,
       equity: live.equity,
       dailyPnl: live.dailyPnl,
@@ -274,6 +346,10 @@ export class Runner {
       submitted: result.submitted.length,
       cancelled: result.cancelled.length,
     };
+
+    this.lastTick = summary;
+    this.lastError = null;
+    return summary;
   }
 
   /** Loop until halted. One failed tick is logged and retried, not fatal. */
@@ -288,6 +364,7 @@ export class Runner {
         this.logger.info?.(this.format(summary));
       } catch (err) {
         // A transient API error must not kill an unattended bot.
+        this.lastError = { message: err.message, at: Date.now() };
         this.logger.warn?.(`[runner] tick ${this.ticks} failed: ${err.message}`);
       }
       if (!this.running) break;
