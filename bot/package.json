@@ -9,10 +9,11 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node src/loop.js",
+    "loop": "node src/loop.js",
+    "report": "node src/index.js",
     "dev": "node --watch src/index.js",
     "check": "node src/api/check-account.js",
-    "loop": "node src/loop.js",
     "probe": "node src/api/probe-minimums.js",
     "resume": "node src/resume.js",
     "backtest": "node backtest/run.js",

@@ -13,7 +13,8 @@
   ],
   "scripts": {
     "install-all": "npm install",
-    "bot": "npm run start --workspace=bot",
+    "bot": "npm run report --workspace=bot",
+    "bot:report": "npm run report --workspace=bot",
     "bot:dev": "npm run dev --workspace=bot",
     "bot:check": "npm run check --workspace=bot",
     "bot:loop": "npm run loop --workspace=bot",

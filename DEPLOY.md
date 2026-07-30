@@ -42,6 +42,8 @@ Keep it somewhere; you'll paste it into both platforms. Have your Alpaca **paper
 npm run bot:loop
 ```
 
+`npm start` also runs the loop, so a missing custom command is no longer fatal — but set it explicitly anyway, so what runs in production is visible in the dashboard rather than implied.
+
 Leave the build command empty. Railway runs `npm ci` at the repo root, which installs both workspaces. That pulls Next.js onto the bot container unnecessarily (~200 MB) but is harmless — not worth fighting the monorepo for.
 
 ### 3. ⚠️ Add the volume — do this before the first real run
@@ -166,7 +168,10 @@ Then set `DASHBOARD_ORIGIN` on Railway to your Vercel URL and redeploy the bot.
 npm run bot:resume     # clear a latched halt (run locally, or Railway shell)
 npm run bot:check      # verify credentials
 npm run bot:probe      # re-measure exchange minimums
+npm run bot:report     # one-shot: print the grid without trading
 ```
+
+**Never run two bots against one account.** Railway plus a local `npm run bot:loop` is the same failure as two replicas — both reconcile the same book. Stop the local one before deploying.
 
 **When it halts** it stays up and serves `/health` as 503 rather than exiting — deliberately, because exiting would make the platform restart it and undo the halt. To resume:
 
