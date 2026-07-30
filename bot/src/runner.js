@@ -211,12 +211,13 @@ export class Runner {
       storedAnchor: readAnchor(this.symbol),
       minOrderSize: live.minOrderSize,
       minOrderNotional: this.env.ratios.minOrderNotional,
-      buyingPower: live.buyingPower,
+      buyingPower: live.buyingPower + (this.engine?.heldCost ?? 0),
       openInventory,
     });
 
     const config = normalizeGridConfig(raw);
-    assertWithinBuyingPower(config, live.buyingPower);
+    // Cash already converted into inventory still counts as grid capital.
+    assertWithinBuyingPower(config, live.buyingPower, this.engine?.heldCost ?? 0);
 
     const previous = this.engine;
     this.engine = new GridEngine({
@@ -361,7 +362,7 @@ export class Runner {
       storedAnchor: readAnchor(this.symbol),
       minOrderSize: live.minOrderSize,
       minOrderNotional: this.env.ratios.minOrderNotional,
-      buyingPower: live.buyingPower,
+      buyingPower: live.buyingPower + this.engine.heldCost,
       openInventory: this.engine.openInventory,
     });
 

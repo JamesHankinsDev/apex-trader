@@ -259,12 +259,15 @@ export function deriveGridConfig({
   // The binding case is the CHEAPEST order, which sits at lowerBound.
   if (Number.isFinite(minOrderNotional) && minOrderNotional > 0) {
     const cheapest = sizing.orderSize * lowerBound;
-    if (cheapest < minOrderNotional) {
+    // Relative epsilon: without it a cheapest order of 9.999999999999998 —
+    // arithmetically exactly the floor — trips the guard and reads absurdly as
+    // "$10.00 is below the $10.00 minimum".
+    if (cheapest < minOrderNotional * (1 - 1e-9)) {
       const maxLevels = Math.floor(
         (sizing.deployable * lowerBound) / (upperBound * minOrderNotional),
       );
       throw new SizingError(
-        `Cheapest order would be $${cheapest.toFixed(2)} (at the $${lowerBound.toFixed(2)} level), ` +
+        `Cheapest order would be $${cheapest.toFixed(4)} (at the $${lowerBound.toFixed(2)} level), ` +
           `below the $${minOrderNotional.toFixed(2)} exchange notional minimum. ` +
           `With $${equity.toFixed(2)} equity at ${(allocationPct * 100).toFixed(0)}% allocation ` +
           `across this band you can support at most ${maxLevels} level(s), not ${levels}. ` +
@@ -275,9 +278,14 @@ export function deriveGridConfig({
   }
 
   // Live constraint: don't plan a grid the account cannot actually fund.
+  //
+  // `buyingPower` here means TOTAL grid capital — cash plus the cost of
+  // inventory already held. Cash spent on a filled level is not gone, it became
+  // the asset, and that level needs no further funding. Comparing against cash
+  // alone makes a working grid look unfundable the moment it starts filling.
   if (Number.isFinite(buyingPower) && sizing.worstCaseNotional > buyingPower) {
     throw new SizingError(
-      `Worst-case notional $${sizing.worstCaseNotional.toFixed(2)} exceeds live buying power ` +
+      `Worst-case notional $${sizing.worstCaseNotional.toFixed(2)} exceeds available capital ` +
         `$${buyingPower.toFixed(2)}. Lower GRID_ALLOCATION_PCT.`,
     );
   }

@@ -126,6 +126,28 @@ Three properties worth knowing:
 
 The dashboard reaches it through `app/api/bot/[...path]/route.js`, a server-side proxy holding `BOT_API_TOKEN`. That's deliberately not a Next rewrite: a rewrite is a transparent proxy and can't attach a header, so it would either bypass auth or fail. The token is server-only and never reaches the browser.
 
+## Backtesting
+
+```bash
+npm run bot:backtest                                    # default config
+npm run bot:backtest -- --sweep                         # compare bands
+npm run bot:backtest -- --months 6 --band 0.075 --levels 6
+```
+
+It drives the **real** `Runner`, and therefore the real engine, sizing, rebalance and stop logic, against a simulated exchange — one tick per bar. A reimplementation of the strategy would only test itself.
+
+`backtest/broker.js` deliberately reproduces the exchange behaviours that broke us live, so a regression in any of those fixes fails the backtest too:
+
+- fees taken **out of the delivered asset**, not charged in cash
+- a notional floor that rejects small orders
+- `buying_power` reported net of resting buys
+- `qty_available` reported net of resting sells
+- `client_order_id` uniqueness
+
+**What it can and cannot prove.** It replays real *prices*, so it exercises grid logic over many cycles. It cannot discover new exchange *behaviours* — the broker only knows rules we have already learned. Every bug found live so far was an integration bug, not a logic one.
+
+Fills assume no slippage past the limit, which is the optimistic end. Intrabar path is unknowable from OHLC, so bar direction decides whether buys or sells are touched first.
+
 ## Deploying
 
 **Yes — Railway for the bot, Vercel for the dashboard.** The bot cannot be serverless: a grid needs a process that stays up between ticks, holds inventory state, and cancels its book on shutdown. Vercel functions are ephemeral, so the bot needs a long-running host (Railway, Fly, Render, or a VPS). The dashboard is a normal Next app and Vercel is a good fit.
@@ -327,7 +349,7 @@ Upstream source: `claude.ai/design/p/0dc922ad-d90b-49a0-82c3-a20c7a389ff4`. A se
 - [x] Order placement + fill tracking
 - [x] Run loop + daily and price stops
 - [x] Dashboard API endpoints + live monitor page
-- [ ] 6-month backtest harness
+- [x] 6-month backtest harness
 - [ ] Port prototype components to ES modules, on real data
 - [ ] Deploy (Railway + Vercel)
-- [ ] 6-month backtest harness
+- [x] 6-month backtest harness

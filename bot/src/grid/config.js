@@ -158,14 +158,30 @@ export function resolveStopPrice(gridConfig, stopPct) {
 
 /**
  * Refuse a grid the account cannot actually fund.
+ *
  * Checked against LIVE buying power rather than a static env number, so it
  * stays correct as the balance moves.
+ *
+ * `heldCost` is what already-filled levels spent. That cash is not gone — it
+ * became inventory, and those levels need no further funding. Ignoring it
+ * makes a healthy grid look unfundable the moment it starts working: the
+ * backtest halted after three fills because $33 of cash had turned into BTC
+ * and the check still demanded cash for all seven levels.
+ *
+ * @param {object} gridConfig
+ * @param {number} buyingPower  live, with our own resting buys added back
+ * @param {number} [heldCost]   cost basis of inventory the grid already holds
  */
-export function assertWithinBuyingPower(gridConfig, buyingPower) {
+export function assertWithinBuyingPower(gridConfig, buyingPower, heldCost = 0) {
   assert(Number.isFinite(buyingPower) && buyingPower >= 0,
     `buyingPower must be a non-negative number, got ${buyingPower}.`);
+  assert(Number.isFinite(heldCost) && heldCost >= 0,
+    `heldCost must be a non-negative number, got ${heldCost}.`);
 
-  assert(gridConfig.maxNotional <= buyingPower,
-    `Grid worst-case notional $${gridConfig.maxNotional.toFixed(2)} exceeds live buying power ` +
-    `$${buyingPower.toFixed(2)}. Lower GRID_ALLOCATION_PCT or GRID_LEVELS.`);
+  const capital = buyingPower + heldCost;
+
+  assert(gridConfig.maxNotional <= capital,
+    `Grid worst-case notional $${gridConfig.maxNotional.toFixed(2)} exceeds available capital ` +
+    `$${capital.toFixed(2)} (cash $${buyingPower.toFixed(2)} + held $${heldCost.toFixed(2)}). ` +
+    `Lower GRID_ALLOCATION_PCT or GRID_LEVELS.`);
 }

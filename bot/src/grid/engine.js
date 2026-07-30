@@ -176,6 +176,13 @@ export class GridEngine {
     return assignSides(this.levels, price);
   }
 
+  /** Quote-currency cost of inventory the grid already holds. */
+  get heldCost() {
+    let total = 0;
+    for (const { qty, price } of this.inventory.values()) total += qty * price;
+    return total;
+  }
+
   /** Net base-asset quantity held from grid buys. */
   get openInventory() {
     let net = 0;

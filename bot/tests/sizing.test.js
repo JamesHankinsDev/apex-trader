@@ -283,6 +283,6 @@ test('the notional check is skipped when no floor is given', () => {
 test('rejects a grid that exceeds live buying power', () => {
   assert.throws(
     () => deriveGridConfig({ ratios, equity: 100000, price: 64731, buyingPower: 100 }),
-    (err) => err instanceof SizingError && /buying power/.test(err.message),
+    (err) => err instanceof SizingError && /available capital/.test(err.message),
   );
 });

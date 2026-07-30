@@ -119,6 +119,36 @@ export function createClient(cfg) {
         base: dataUrl,
         query: { symbols: symbol },
       }),
+
+    /**
+     * Historical OHLC bars, following pagination to the end of the range.
+     * Crypto has no market hours, so a range returns continuous coverage.
+     *
+     * @param {object} o  { symbol, timeframe, start, end }
+     * @returns {Promise<Array<{t,o,h,l,c,v}>>} ascending by time
+     */
+    async getCryptoBars({ symbol, timeframe = '1H', start, end }) {
+      const out = [];
+      let pageToken;
+
+      do {
+        const page = await request('/v1beta3/crypto/us/bars', {
+          base: dataUrl,
+          query: {
+            symbols: symbol,
+            timeframe,
+            start,
+            end,
+            limit: 10000,
+            ...(pageToken ? { page_token: pageToken } : {}),
+          },
+        });
+        out.push(...(page?.bars?.[symbol] ?? []));
+        pageToken = page?.next_page_token ?? undefined;
+      } while (pageToken);
+
+      return out;
+    },
   };
 }
 
