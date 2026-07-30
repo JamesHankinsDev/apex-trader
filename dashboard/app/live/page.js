@@ -138,7 +138,10 @@ function Ladder({ snapshot }) {
         <tbody>
           {rows.map((lvl) => {
             const order = byLevel.get(lvl.index);
-            const isNearPrice = price != null && Math.abs(lvl.price - price) < (rows[0].price - rows[1]?.price ?? 0) / 2;
+            // `a - b ?? 0` parses as `(a - b) ?? 0`, and ?? does not catch NaN,
+            // so a single-row ladder made this NaN and nothing ever highlighted.
+            const gap = rows.length > 1 ? Math.abs(rows[0].price - rows[1].price) : Infinity;
+            const isNearPrice = price != null && Math.abs(lvl.price - price) < gap / 2;
             return (
               <tr
                 key={lvl.index}
