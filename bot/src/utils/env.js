@@ -199,6 +199,13 @@ export function loadEnv() {
        * MIN_ORDER_NOTIONAL_BTCUSD takes precedence over MIN_ORDER_NOTIONAL.
        */
       minOrderNotional: minNotionalFor(optional('GRID_SYMBOL', 'BTC/USD')),
+      /**
+       * Exchange fee per side, taken from the delivered asset on a buy and
+       * from proceeds on a sell. 0.15% measured on Alpaca crypto. Realized
+       * P&L is reported NET of this; getting it wrong misreports performance,
+       * it does not affect order placement.
+       */
+      feeRate: pct('FEE_RATE', 0.0015),
     },
 
     risk: {

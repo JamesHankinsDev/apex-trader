@@ -26,9 +26,11 @@ function env({ dryRun = false, stopPct, maxDailyLossPct = 0.05 } = {}) {
       reanchorDrift: 0.5,
       resizeMode: 'on_flat',
       resizeThreshold: 0.1,
+      feeRate: 0,
     },
     risk: { maxDailyLossPct, stopPct },
     runtime: { dryRun, pollIntervalMs: 1 },
+    // fee 0: these tests assert quantities, not fee arithmetic.
   };
 }
 

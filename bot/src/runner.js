@@ -119,6 +119,14 @@ export class Runner {
             })),
             realizedPnl: e.realizedPnl,
             roundTrips: e.fills.filter((f) => f.realizedPnl !== undefined).length,
+            // Marked against the last tick's price, so the tile can show
+            // exposure that realized P&L deliberately excludes.
+            unrealizedPnl: t
+              ? [...e.inventory.values()].reduce(
+                  (sum, h) => sum + (h.qty * t.price - (h.cost ?? h.qty * h.price)), 0)
+              : 0,
+            feesPaidBase: e.feesPaidBase,
+            feesPaidQuote: e.feesPaidQuote,
           }
         : null,
       book: e && t ? e.desiredOrders(t.price) : [],
@@ -231,6 +239,7 @@ export class Runner {
       client: this.client,
       dryRun: this.dryRun,
       logger: this.logger,
+      feeRate: this.env.ratios.feeRate ?? 0.0015,
     });
 
     // Carry accounting across a rebuild.
@@ -239,6 +248,8 @@ export class Runner {
       this.engine.fills = previous.fills;
       this.engine.realizedPnl = previous.realizedPnl;
       this.engine.nonce = previous.nonce;
+      this.engine.feesPaidBase = previous.feesPaidBase;
+      this.engine.feesPaidQuote = previous.feesPaidQuote;
     }
 
     if (raw.derivation) {

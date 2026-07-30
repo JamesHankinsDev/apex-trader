@@ -130,11 +130,19 @@ export class GridEngine {
    * @param {boolean} [opts.dryRun] when true, reconcile plans but never submits
    * @param {object} [opts.logger]
    */
-  constructor({ config, client, dryRun = true, logger = console }) {
+  constructor({ config, client, dryRun = true, logger = console, feeRate = 0.0015 }) {
     this.config = config;
     this.client = client;
     this.dryRun = dryRun;
     this.logger = logger;
+    /**
+     * Taken out of the delivered asset on a buy and out of proceeds on a sell.
+     * Measured at 0.15%/side on Alpaca crypto — see `npm run bot:probe`.
+     * Ignoring it overstated realized P&L by 7% on a ±10% band, 18% on ±5%.
+     */
+    this.feeRate = feeRate;
+    this.feesPaidBase = 0;
+    this.feesPaidQuote = 0;
 
     this.levels = calculateLevels(config);
     this.orderSize = config.orderSize;
@@ -384,19 +392,53 @@ export class GridEngine {
     this.fills.push(fill);
 
     if (side === 'buy') {
-      this.inventory.set(levelIndex, { qty, price });
+      // The fee is taken out of the BTC delivered, so less lands than was
+      // ordered. Recording the ordered amount overstates what we hold and what
+      // we can sell. `cost` is the cash that actually left.
+      const received = roundQty(qty * (1 - this.feeRate));
+      const cost = qty * price;
+      this.feesPaidBase += qty - received;
+      fill.received = received;
+      fill.cost = cost;
+      this.inventory.set(levelIndex, { qty: received, price, cost });
     } else {
-      // A sell at level i closes the buy that was opened at level i-1.
-      const openedAt = levelIndex - 1;
+      // A sell at level i closes the buy opened at level i-1. If the band has
+      // changed since, that index may not exist — fall back to the nearest
+      // holding below the sell price rather than silently losing the P&L.
+      let openedAt = levelIndex - 1;
+      if (!this.inventory.has(openedAt)) {
+        let bestDist = Infinity;
+        for (const [idx, held] of this.inventory) {
+          if (held.price >= price) continue;
+          const d = price - held.price;
+          if (d < bestDist) { bestDist = d; openedAt = idx; }
+        }
+      }
+
       const held = this.inventory.get(openedAt);
       if (held) {
-        const pnl = qty * (price - held.price);
+        const gross = qty * price;
+        const net = gross * (1 - this.feeRate);
+        this.feesPaidQuote += gross - net;
+
+        // Release cost proportionally, so a partial exit books partial cost.
+        const share = held.qty > 0 ? Math.min(1, qty / held.qty) : 1;
+        const costOut = (held.cost ?? held.qty * held.price) * share;
+
+        const pnl = net - costOut;
         this.realizedPnl += pnl;
         fill.realizedPnl = pnl;
+        fill.grossPnl = gross - costOut;
         fill.closedLevel = openedAt;
-        this.inventory.delete(openedAt);
+
+        if (share >= 1) this.inventory.delete(openedAt);
+        else this.inventory.set(openedAt, {
+          qty: held.qty - qty,
+          price: held.price,
+          cost: (held.cost ?? held.qty * held.price) - costOut,
+        });
       } else {
-        this.logger.warn?.(`[grid] sell filled at level ${levelIndex} with no matching buy at ${openedAt}`);
+        this.logger.warn?.(`[grid] sell filled at level ${levelIndex} with no matching buy`);
       }
     }
 
@@ -442,16 +484,22 @@ export class GridEngine {
    */
   async hydrate() {
     const orders = await this.client.getOrders({ status: 'all', limit: 500 });
-    this.inventory.clear();
 
-    for (const o of orders) {
-      const parsed = parseClientOrderId(o.client_order_id);
-      if (!parsed || o.status !== 'filled') continue;
-      const qty = roundQty(Number(o.filled_qty ?? o.qty));
-      const price = Number(o.filled_avg_price ?? o.limit_price);
-      if (parsed.side === 'buy') this.inventory.set(parsed.levelIndex, { qty, price });
-      else this.inventory.delete(parsed.levelIndex - 1);
-    }
+    // REPLAY rather than reconstruct. Running the real recordFill over the
+    // history rebuilds inventory, fill log, realized P&L and fee totals in one
+    // pass, through the same code path live trading uses — so a restart no
+    // longer zeroes the only number that measures whether this works.
+    this.inventory.clear();
+    this.fills = [];
+    this.realizedPnl = 0;
+    this.feesPaidBase = 0;
+    this.feesPaidQuote = 0;
+
+    const filled = orders
+      .filter((o) => o.status === 'filled' && parseClientOrderId(o.client_order_id))
+      .sort((a, b) => String(a.filled_at ?? '').localeCompare(String(b.filled_at ?? '')));
+
+    for (const o of filled) this.recordFill(o);
 
     this.remapInventoryByPrice();
     return this.openInventory;

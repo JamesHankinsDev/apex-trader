@@ -34,8 +34,10 @@ function fakeClient({ open = [], all = [] } = {}) {
   };
 }
 
-const engineAt = (client, dryRun = false) =>
-  new GridEngine({ config, client, dryRun, logger: { warn() {}, info() {} } });
+// feeRate 0 unless a test is specifically about fees — otherwise every
+// quantity assertion turns into a 0.15% arithmetic puzzle about nothing.
+const engineAt = (client, dryRun = false, feeRate = 0) =>
+  new GridEngine({ config, client, dryRun, feeRate, logger: { warn() {}, info() {} } });
 
 /** Build a live order the way Alpaca would return it. */
 function liveOrder({ levelIndex, side, price, qty, id = 'o1' }) {
@@ -206,7 +208,7 @@ test('a buy fill records inventory and rests an exit above it', async () => {
 });
 
 test('a sell fill realizes P&L and clears the inventory it closed', async () => {
-  const e = engineAt(fakeClient());
+  const e = engineAt(fakeClient(), false, 0);
 
   await e.onFill({
     client_order_id: buildClientOrderId('BTC/USD', 3, 'buy', 1),
@@ -220,7 +222,52 @@ test('a sell fill realizes P&L and clears the inventory it closed', async () => 
   });
 
   assert.equal(e.openInventory, 0, 'position closed');
-  assert.ok(Math.abs(e.realizedPnl - 2) < 1e-9, '0.001 x $2000 = $2');
+  assert.ok(Math.abs(e.realizedPnl - 2) < 1e-9, 'with no fee: 0.001 x $2000 = $2');
+});
+
+test('realized P&L is reported NET of fees, not gross', async () => {
+  const fee = 0.0015;
+  const e = engineAt(fakeClient(), false, fee);
+
+  await e.onFill({
+    client_order_id: buildClientOrderId('BTC/USD', 3, 'buy', 1),
+    filled_qty: '0.001',
+    filled_avg_price: '61000',
+  });
+  // The fee came out of the BTC, so less than 0.001 is held and sellable.
+  const held = e.inventory.get(3);
+  assert.ok(held.qty < 0.001, 'inventory records what LANDED, not what was ordered');
+  assert.ok(Math.abs(held.cost - 61) < 1e-9, 'cost basis is the cash that left');
+
+  await e.onFill({
+    client_order_id: buildClientOrderId('BTC/USD', 4, 'sell', 2),
+    filled_qty: String(held.qty),
+    filled_avg_price: '63000',
+  });
+
+  const gross = held.qty * 63000 - 61;
+  assert.ok(e.realizedPnl < gross, `net ${e.realizedPnl} should be below gross ${gross}`);
+  assert.ok(e.feesPaidQuote > 0 && e.feesPaidBase > 0, 'both legs charged a fee');
+
+  // Reported P&L must equal proceeds-after-fee minus what the buy cost.
+  const expected = held.qty * 63000 * (1 - fee) - 61;
+  assert.ok(Math.abs(e.realizedPnl - expected) < 1e-9, `${e.realizedPnl} != ${expected}`);
+});
+
+test('hydrate replays history so P&L survives a restart', async () => {
+  const history = [
+    { client_order_id: buildClientOrderId('BTC/USD', 3, 'buy', 1), status: 'filled',
+      filled_qty: '0.001', filled_avg_price: '61000', filled_at: '2026-01-01T00:00:00Z' },
+    { client_order_id: buildClientOrderId('BTC/USD', 4, 'sell', 2), status: 'filled',
+      filled_qty: '0.0009985', filled_avg_price: '63000', filled_at: '2026-01-02T00:00:00Z' },
+  ];
+  const e = engineAt(fakeClient({ all: history }), true, 0.0015);
+
+  await e.hydrate();
+
+  assert.equal(e.fills.length, 2, 'the fill log is rebuilt, not left empty');
+  assert.ok(e.realizedPnl > 0, 'realized P&L is reconstructed, not reset to zero');
+  assert.equal(e.openInventory, 0, 'and the round trip is correctly closed');
 });
 
 test('a resize does not change the size of an open round trip', async () => {

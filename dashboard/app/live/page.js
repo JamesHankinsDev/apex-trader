@@ -336,7 +336,7 @@ export default function Live() {
           <Tile
             label="Realized P&L"
             value={s?.position ? signed(s.position.realizedPnl) : '—'}
-            sub={s?.position ? `${s.position.roundTrips} round trip(s)` : null}
+            sub={s?.position ? `${s.position.roundTrips} trip(s) · net of fees` : null}
             tone={toneFor(s?.position?.realizedPnl)}
           />
           <Tile
@@ -355,7 +355,17 @@ export default function Live() {
             marginBottom: 26,
           }}
         >
-          <Tile label="Inventory" value={s?.position ? String(s.position.inventory) : '—'} sub={s?.position ? `${s.position.heldLevels.length} level(s) held` : null} />
+          <Tile
+            label="Unrealized P&L"
+            value={s?.position ? signed(s.position.unrealizedPnl ?? 0) : '—'}
+            sub={s?.position ? `${s.position.inventory} held · ${s.position.heldLevels.length} level(s)` : null}
+            tone={toneFor(s?.position?.unrealizedPnl)}
+          />
+          <Tile
+            label="Fees paid"
+            value={s?.position ? `$${money(s.position.feesPaidQuote ?? 0, 4)}` : '—'}
+            sub={s?.position ? `+ ${(s.position.feesPaidBase ?? 0).toFixed(9)} base` : null}
+          />
           <Tile label="Order size" value={s?.grid ? s.grid.orderSize.toFixed(8) : '—'} sub={s?.grid ? `${s.grid.levels} levels · ${s.grid.spacing}` : null} />
           <Tile label="Band" value={s?.grid ? `$${money(s.grid.lowerBound, 0)} – $${money(s.grid.upperBound, 0)}` : '—'} sub={s?.grid ? `anchor ${s.grid.anchorMode}` : null} />
           <Tile label="Stop price" value={s?.grid?.stopPrice ? `$${money(s.grid.stopPrice)}` : 'not set'} sub={s?.grid?.stopPrice ? 'liquidates held inventory' : 'inventory held indefinitely'} />
