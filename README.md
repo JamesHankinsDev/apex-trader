@@ -55,14 +55,45 @@ npm test                     # all workspace tests
 
 ## Grid strategy
 
-A grid spans `GRID_LOWER_BOUND` to `GRID_UPPER_BOUND` across `GRID_LEVELS` price levels. Resting BUYs sit below the current price, resting SELLs above it. Each buy-then-sell round trip across one level gap is the profit unit.
+A grid spans a price band across `GRID_LEVELS` levels. Resting BUYs sit below the current price, resting SELLs above it. Each buy-then-sell round trip across one level gap is the profit unit.
 
 | Spacing | Level formula | Use when |
 |---|---|---|
 | `arithmetic` | `lower + i·(upper−lower)/(n−1)` | narrow bands, stable price |
 | `geometric` | `lower·(upper/lower)^(i/(n−1))` | crypto — constant % per round trip |
 
-Risk limits are enforced at startup: `assertWithinRiskLimits()` refuses to run if the grid's worst-case notional (`orderSize × levels × upperBound`) exceeds `MAX_POSITION_USD`.
+### Everything is derived from live state
+
+Nothing about the band or the order size is hard-coded, so nothing goes stale as the account grows:
+
+```
+anchor      = market price at first run (persisted)
+bounds      = anchor ± GRID_BAND_PCT
+order size  = (equity × GRID_ALLOCATION_PCT) / (levels × upperBound)
+daily stop  = equity × MAX_DAILY_LOSS_PCT
+```
+
+Equity, buying power, market price, and the exchange's `min_order_size` are all read from Alpaca at startup. Two limits are then checked against live numbers rather than static config: the derived order size must clear the exchange minimum, and worst-case notional must fit inside actual buying power.
+
+`MAX_POSITION_USD` no longer exists — live buying power replaced it.
+
+### ⚠️ Anchor mode is a strategy decision
+
+`GRID_ANCHOR_MODE` controls whether the band can follow price, and the two behaviours are not interchangeable:
+
+| Mode | Band | Consequence |
+|---|---|---|
+| `session` *(default)* | fixed after first run | price can leave it → bot idles |
+| `manual` | pinned to `GRID_ANCHOR_PRICE` | same, at a price you choose |
+| `rolling` | re-centres on price | **bot never idles — averages down forever in a downtrend** |
+
+The idling in `session`/`manual` is the feature. It's what stops the grid buying all the way down a trend. `rolling` removes that brake: because the band chases price, `isOutOfBand()` never fires. That is the classic way grid bots blow up. If you use it, pair it with a tight `MAX_DAILY_LOSS_PCT` and an exit plan.
+
+The anchor is persisted to `bot/state/anchor.json` (gitignored) so a restart doesn't silently re-centre a `session` grid.
+
+### Pinning absolute values
+
+Set `GRID_LOWER_BOUND`, `GRID_UPPER_BOUND`, **and** `GRID_ORDER_SIZE` together to opt out of derivation entirely. The bot warns when you do, because those values won't scale and you'll be re-setting them by hand.
 
 ## Known gaps
 

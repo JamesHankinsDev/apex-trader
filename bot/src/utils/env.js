@@ -57,6 +57,32 @@ function num(key, fallback) {
   return parsed;
 }
 
+/** Like num(), but returns undefined when unset instead of throwing. */
+function optionalNum(key) {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new EnvError(`Env var ${key} must be a finite number, got "${raw}".`);
+  }
+  return parsed;
+}
+
+/** A ratio in (0, 1]. Accepts "0.15" or "15%". */
+function pct(key, fallback) {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === '') {
+    if (fallback === undefined) throw new EnvError(`Missing required ratio env var ${key}.`);
+    return fallback;
+  }
+  const trimmed = raw.trim();
+  const parsed = trimmed.endsWith('%') ? Number(trimmed.slice(0, -1)) / 100 : Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
+    throw new EnvError(`Env var ${key} must be a ratio in (0, 1] (e.g. 0.15 or 15%), got "${raw}".`);
+  }
+  return parsed;
+}
+
 function oneOf(key, allowed, fallback) {
   const value = optional(key, fallback);
   if (!allowed.includes(value)) {
@@ -108,17 +134,39 @@ export function loadEnv() {
   const env = {
     alpaca,
     tradingMode,
+    // Shape of the grid. Bounds and order size are DERIVED at runtime from
+    // live account state unless explicitly pinned below.
     grid: {
       symbol: optional('GRID_SYMBOL', 'BTC/USD'),
-      lowerBound: num('GRID_LOWER_BOUND'),
-      upperBound: num('GRID_UPPER_BOUND'),
       levels: num('GRID_LEVELS', 20),
       spacing: oneOf('GRID_SPACING', ['arithmetic', 'geometric'], 'geometric'),
-      orderSize: num('GRID_ORDER_SIZE'),
+
+      // Optional absolute overrides. Setting these opts out of auto-scaling —
+      // they will NOT grow with the account.
+      lowerBound: optionalNum('GRID_LOWER_BOUND'),
+      upperBound: optionalNum('GRID_UPPER_BOUND'),
+      orderSize: optionalNum('GRID_ORDER_SIZE'),
     },
+
+    // Ratios the grid rescales itself from.
+    ratios: {
+      /** Half-width of the band around the anchor. 0.15 => anchor ±15%. */
+      bandPct: pct('GRID_BAND_PCT', 0.15),
+      /** Fraction of equity the grid may deploy at worst case. */
+      allocationPct: pct('GRID_ALLOCATION_PCT', 0.8),
+      /** manual | session | rolling — see grid/sizing.js resolveAnchor(). */
+      anchorMode: oneOf('GRID_ANCHOR_MODE', ['manual', 'session', 'rolling'], 'session'),
+      /** Required only when anchorMode is 'manual'. */
+      manualAnchor: optionalNum('GRID_ANCHOR_PRICE'),
+      /** rolling only: re-anchor once drift exceeds this fraction of half-band. */
+      reanchorDrift: pct('GRID_REANCHOR_DRIFT', 0.5),
+    },
+
     risk: {
-      maxPositionUsd: num('MAX_POSITION_USD', 5000),
-      maxDailyLossUsd: num('MAX_DAILY_LOSS_USD', -250),
+      /** Halt if the day's loss exceeds this fraction of equity. */
+      maxDailyLossPct: pct('MAX_DAILY_LOSS_PCT', 0.05),
+      /** Optional hard dollar floor, independent of equity. */
+      maxDailyLossUsd: optionalNum('MAX_DAILY_LOSS_USD'),
     },
     runtime: {
       pollIntervalMs: num('POLL_INTERVAL_MS', 5000),

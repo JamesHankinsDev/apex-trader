@@ -90,27 +90,48 @@ export function normalizeGridConfig(raw = {}) {
 }
 
 /**
- * Validate a normalized grid config against account risk limits.
- * Separate from normalization because limits live outside the strategy.
+ * Resolve the day's stop-loss in dollars from live equity.
  *
- * @param {object} gridConfig  output of normalizeGridConfig
- * @param {object} risk        { maxPositionUsd, maxDailyLossUsd }
+ * The ratio scales with the account; the optional absolute value acts as a
+ * hard floor so a growing balance can't quietly widen the loss you tolerate.
+ * Whichever is tighter wins.
+ *
+ * @param {object} risk    { maxDailyLossPct, maxDailyLossUsd? }
+ * @param {number} equity  live account equity
+ * @returns {{ maxDailyLossUsd: number, source: string }} loss as a NEGATIVE number
  */
-export function assertWithinRiskLimits(gridConfig, risk) {
-  assert(Number.isFinite(risk?.maxPositionUsd) && risk.maxPositionUsd > 0,
-    `risk.maxPositionUsd must be a positive number, got ${risk?.maxPositionUsd}.`);
-  assert(Number.isFinite(risk?.maxDailyLossUsd) && risk.maxDailyLossUsd < 0,
-    `risk.maxDailyLossUsd must be a negative number, got ${risk?.maxDailyLossUsd}.`);
+export function resolveRiskLimits(risk, equity) {
+  assert(Number.isFinite(equity) && equity > 0, `equity must be positive, got ${equity}.`);
+  assert(
+    Number.isFinite(risk?.maxDailyLossPct) && risk.maxDailyLossPct > 0 && risk.maxDailyLossPct <= 1,
+    `risk.maxDailyLossPct must be a ratio in (0, 1], got ${risk?.maxDailyLossPct}.`,
+  );
 
-  assert(gridConfig.maxNotional <= risk.maxPositionUsd,
-    `Grid worst-case notional $${gridConfig.maxNotional.toFixed(2)} exceeds ` +
-    `MAX_POSITION_USD $${risk.maxPositionUsd.toFixed(2)}. ` +
-    `Reduce GRID_ORDER_SIZE or GRID_LEVELS, or raise the limit.`);
+  const fromPct = -(equity * risk.maxDailyLossPct);
+
+  if (risk.maxDailyLossUsd === undefined) {
+    return { maxDailyLossUsd: fromPct, source: 'MAX_DAILY_LOSS_PCT' };
+  }
+
+  assert(risk.maxDailyLossUsd < 0,
+    `MAX_DAILY_LOSS_USD must be negative, got ${risk.maxDailyLossUsd}.`);
+
+  // Both are negative; the tighter stop is the one closer to zero.
+  return risk.maxDailyLossUsd > fromPct
+    ? { maxDailyLossUsd: risk.maxDailyLossUsd, source: 'MAX_DAILY_LOSS_USD (tighter)' }
+    : { maxDailyLossUsd: fromPct, source: 'MAX_DAILY_LOSS_PCT (tighter)' };
 }
 
-/** Build a grid config straight from a loaded env object. */
-export function gridConfigFromEnv(env) {
-  const cfg = normalizeGridConfig(env.grid);
-  assertWithinRiskLimits(cfg, env.risk);
-  return cfg;
+/**
+ * Refuse a grid the account cannot actually fund.
+ * Checked against LIVE buying power rather than a static env number, so it
+ * stays correct as the balance moves.
+ */
+export function assertWithinBuyingPower(gridConfig, buyingPower) {
+  assert(Number.isFinite(buyingPower) && buyingPower >= 0,
+    `buyingPower must be a non-negative number, got ${buyingPower}.`);
+
+  assert(gridConfig.maxNotional <= buyingPower,
+    `Grid worst-case notional $${gridConfig.maxNotional.toFixed(2)} exceeds live buying power ` +
+    `$${buyingPower.toFixed(2)}. Lower GRID_ALLOCATION_PCT or GRID_LEVELS.`);
 }

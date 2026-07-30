@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeGridConfig, assertWithinRiskLimits, GridConfigError } from '../src/grid/config.js';
+import {
+  normalizeGridConfig,
+  assertWithinBuyingPower,
+  resolveRiskLimits,
+  GridConfigError,
+} from '../src/grid/config.js';
 import { calculateLevels, assignSides, isOutOfBand } from '../src/grid/engine.js';
 
 const base = {
@@ -85,8 +90,40 @@ test('config validation rejects bad input', () => {
   }
 });
 
-test('risk limits reject an oversized grid', () => {
+test('buying power rejects an unfundable grid', () => {
   const cfg = normalizeGridConfig(base); // notional = 0.001 * 6 * 100000 = 600
-  assert.doesNotThrow(() => assertWithinRiskLimits(cfg, { maxPositionUsd: 5000, maxDailyLossUsd: -250 }));
-  assert.throws(() => assertWithinRiskLimits(cfg, { maxPositionUsd: 100, maxDailyLossUsd: -250 }), GridConfigError);
+  assert.equal(cfg.maxNotional, 600);
+  assert.doesNotThrow(() => assertWithinBuyingPower(cfg, 5000));
+  assert.doesNotThrow(() => assertWithinBuyingPower(cfg, 600)); // exactly affordable
+  assert.throws(() => assertWithinBuyingPower(cfg, 599.99), GridConfigError);
+  assert.throws(() => assertWithinBuyingPower(cfg, 100), GridConfigError);
+});
+
+test('daily stop scales with equity', () => {
+  const risk = { maxDailyLossPct: 0.05 };
+  assert.equal(resolveRiskLimits(risk, 100).maxDailyLossUsd, -5);
+  assert.equal(resolveRiskLimits(risk, 10000).maxDailyLossUsd, -500);
+  // No hand-editing needed as the account grows — that's the point.
+});
+
+test('absolute daily stop acts as a floor, tighter wins', () => {
+  const risk = { maxDailyLossPct: 0.05, maxDailyLossUsd: -50 };
+
+  // 5% of 10k = -500, but the absolute -50 is tighter.
+  const big = resolveRiskLimits(risk, 10000);
+  assert.equal(big.maxDailyLossUsd, -50);
+  assert.match(big.source, /USD/);
+
+  // 5% of 100 = -5, which is tighter than -50.
+  const small = resolveRiskLimits(risk, 100);
+  assert.equal(small.maxDailyLossUsd, -5);
+  assert.match(small.source, /PCT/);
+});
+
+test('resolveRiskLimits rejects bad input', () => {
+  assert.throws(() => resolveRiskLimits({ maxDailyLossPct: 0.05 }, 0), GridConfigError);
+  assert.throws(() => resolveRiskLimits({ maxDailyLossPct: 0 }, 100), GridConfigError);
+  assert.throws(() => resolveRiskLimits({ maxDailyLossPct: 1.5 }, 100), GridConfigError);
+  // A positive "loss" is almost certainly a sign error.
+  assert.throws(() => resolveRiskLimits({ maxDailyLossPct: 0.05, maxDailyLossUsd: 50 }, 100), GridConfigError);
 });
