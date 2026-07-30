@@ -1,0 +1,21 @@
+{
+  "name": "@apex-trader/bot",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Grid trading engine for Alpaca crypto markets.",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "backtest": "node backtest/run.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@alpacahq/alpaca-trade-api": "^3.1.3",
+    "dotenv": "^16.4.7"
+  }
+}

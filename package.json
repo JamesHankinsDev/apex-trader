@@ -1,0 +1,24 @@
+{
+  "name": "apex-trader",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Grid-based algorithmic crypto trading bot on Alpaca, with a Next.js dashboard.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "bot",
+    "dashboard"
+  ],
+  "scripts": {
+    "install-all": "npm install",
+    "bot": "npm run start --workspace=bot",
+    "bot:dev": "npm run dev --workspace=bot",
+    "bot:backtest": "npm run backtest --workspace=bot",
+    "dashboard": "npm run dev --workspace=dashboard",
+    "dashboard:build": "npm run build --workspace=dashboard",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  }
+}
