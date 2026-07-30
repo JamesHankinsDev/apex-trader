@@ -26,6 +26,7 @@ function rejectingClient(reason = 'cost basis must be >= minimal amount of order
     getAccount: async () => ({ equity: '100', last_equity: '100', buying_power: '100' }),
     getLatestCryptoQuote: async () => ({ quotes: { 'BTC/USD': { bp: 64990, ap: 65010 } } }),
     getAsset: async () => ({ min_order_size: '0.000015565', tradable: true }),
+    getPositions: async () => [],
     getOrders: async () => [],
     submitOrder: async () => { calls.attempted++; throw new Error(reason); },
     cancelOrder: async () => ({}),

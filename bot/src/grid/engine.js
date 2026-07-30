@@ -24,6 +24,8 @@ const CLIENT_PREFIX = 'apex';
 
 const roundPrice = (p) => Number(p.toFixed(PRICE_DP));
 const roundQty = (q) => Number(q.toFixed(QTY_DP));
+/** Round DOWN — never ask the exchange for more of an asset than we hold. */
+const floorQty = (q) => Math.floor(q * 10 ** QTY_DP) / 10 ** QTY_DP;
 
 /** BTC/USD -> BTCUSD, so it's safe inside a client_order_id. */
 const slug = (symbol) => symbol.replace(/[^A-Za-z0-9]/g, '');
@@ -151,6 +153,21 @@ export class GridEngine {
      * run id keeps ids unique across restarts.
      */
     this.runId = Date.now().toString(36);
+
+    /**
+     * Base asset actually sellable, from the live position.
+     *
+     * NOT the same as what we bought. Alpaca takes its crypto fee OUT OF THE
+     * DELIVERED ASSET: a filled buy of 0.00016812 BTC left 0.000167867 in the
+     * account — 0.15% short — while `filled_qty` still reported the full
+     * 0.00016812 and `accrued_fees` stayed $0. Sizing a counter-sell from the
+     * fill quantity therefore asks for BTC that the fee consumed, and every
+     * sell is rejected with "insufficient balance for BTC".
+     *
+     * Infinity means "unknown, don't clamp" so unit tests and the first tick
+     * behave as before.
+     */
+    this.availableQty = Infinity;
   }
 
   /** Display plan — levels with sides assigned. */
@@ -188,19 +205,33 @@ export class GridEngine {
     const claimed = new Set();
 
     // 1 — exits for everything currently held.
+    const sells = [];
     for (const [levelIndex, held] of this.inventory) {
       const counter = counterOrderFor(
         { levelIndex, side: 'buy', qty: held.qty, price: held.price },
         this.levels,
       );
       if (!counter) continue; // held at the top of the band; nothing to close into
-      orders.push({
+      sells.push({
         levelIndex: counter.levelIndex,
         side: counter.side,
         price: roundPrice(counter.price),
-        qty: roundQty(counter.qty),
+        qty: counter.qty,
       });
       claimed.add(counter.levelIndex);
+    }
+
+    // Trading fees are taken out of the delivered asset, so the sum of what we
+    // *bought* always exceeds what we can actually *sell*. Scale exits down to
+    // the live balance rather than having the exchange reject them.
+    const wanted = sells.reduce((sum, s) => sum + s.qty, 0);
+    const scale = wanted > this.availableQty ? this.availableQty / wanted : 1;
+
+    for (const s of sells) {
+      // Floor, never round: asking for one satoshi too many is a hard reject.
+      const qty = scale < 1 ? floorQty(s.qty * scale) : roundQty(s.qty);
+      if (qty <= 0) continue; // dust — nothing sellable at this level
+      orders.push({ ...s, qty });
     }
 
     // 2 — buys below price, skipping levels already holding or spoken for.

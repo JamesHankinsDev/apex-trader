@@ -140,12 +140,35 @@ export class Runner {
 
   /** Fetch everything a tick needs in one round of requests. */
   async readLiveState() {
-    const [account, quotes, asset, open] = await Promise.all([
+    const [account, quotes, asset, open, positions] = await Promise.all([
       this.client.getAccount(),
       this.client.getLatestCryptoQuote(this.symbol),
       this.client.getAsset(this.symbol).catch(() => null),
       this.client.getOrders({ status: 'open', limit: 500 }).catch(() => []),
+      this.client.getPositions().catch(() => []),
     ]);
+
+    // Positions come back without the slash: BTC/USD -> BTCUSD.
+    const slug = this.symbol.replace(/[^A-Za-z0-9]/g, '');
+    const position = positions.find((p) => p.symbol === slug || p.symbol === this.symbol);
+
+    // Same double-counting trap as buying power, one asset over: qty_available
+    // EXCLUDES quantity reserved by our own resting sell. Using it directly
+    // makes the grid oscillate — place the exit, next tick sees 0 available and
+    // cancels it, tick after sees the balance again and re-places it, forever.
+    // Add our own sell reservations back; a sell placed by hand is left out,
+    // because that inventory really is committed elsewhere.
+    let reservedQty = 0;
+    for (const o of open) {
+      if (o.symbol !== this.symbol) continue;
+      if (!parseClientOrderId(o.client_order_id)) continue;
+      if (o.side !== 'sell') continue;
+      reservedQty += Number(o.qty);
+    }
+
+    const availableQty = position
+      ? Number(position.qty_available ?? position.qty) + reservedQty
+      : 0;
 
     // A resting buy already has its cost deducted from buying_power. Comparing
     // the grid's TOTAL worst case against what's left double-counts the grid's
@@ -172,6 +195,8 @@ export class Runner {
       dailyPnl: Number(account.equity) - Number(account.last_equity),
       price: Runner.midFrom(quotes?.quotes?.[this.symbol]),
       minOrderSize: asset?.min_order_size ? Number(asset.min_order_size) : undefined,
+      position,
+      availableQty,
     };
   }
 
@@ -365,6 +390,11 @@ export class Runner {
     }
 
     // 5 — bring the book in line.
+    //
+    // Exits are capped at the balance the exchange says we actually hold, not
+    // at what we bought: the crypto fee is taken out of the delivered asset,
+    // so bought > sellable and an uncapped counter-sell is always rejected.
+    this.engine.availableQty = live.availableQty;
     const result = await this.engine.reconcile(live.price);
     this.lastRejections = result.rejected ?? [];
 

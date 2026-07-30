@@ -32,7 +32,7 @@ function env({ dryRun = false, stopPct, maxDailyLossPct = 0.05 } = {}) {
   };
 }
 
-function fakeClient({ equity = 100, lastEquity = 100, price = 65000, open = [], closed = [] } = {}) {
+function fakeClient({ equity = 100, lastEquity = 100, price = 65000, open = [], closed = [], positions = [] } = {}) {
   const calls = { submitted: [], cancelled: [] };
   return {
     calls,
@@ -45,6 +45,7 @@ function fakeClient({ equity = 100, lastEquity = 100, price = 65000, open = [], 
       quotes: { 'BTC/USD': { bp: price - 10, ap: price + 10 } },
     }),
     getAsset: async () => ({ min_order_size: '0.000015565', tradable: true }),
+    getPositions: async () => positions,
     getOrders: async ({ status }) => (status === 'open' ? open : closed),
     submitOrder: async (o) => {
       calls.submitted.push(o);
