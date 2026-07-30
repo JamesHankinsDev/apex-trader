@@ -95,7 +95,14 @@ export class Runner {
         stallLimit: STALL_LIMIT,
       },
       account: t
-        ? { equity: t.equity, dailyPnl: t.dailyPnl, lossLimit: t.lossLimit }
+        ? {
+            equity: t.equity,
+            dailyPnl: t.dailyPnl,
+            lossLimit: t.lossLimit,
+            cash: t.cash ?? 0,
+            heldValue: t.heldValue ?? 0,
+            pendingValue: t.pendingValue ?? 0,
+          }
         : null,
       market: t ? { price: t.price, idle: t.idle } : null,
       grid: e
@@ -211,6 +218,16 @@ export class Runner {
       minOrderSize: asset?.min_order_size ? Number(asset.min_order_size) : undefined,
       position,
       availableQty,
+      // Equity is NOT cash + holdings. Alpaca reports `cash` net of order
+      // reservations, but equity includes them — that cash is still yours,
+      // just earmarked. Derive the pending slice as the residual so the three
+      // parts always sum to equity exactly, whatever reserved it.
+      cash: Number(account.cash),
+      heldValue: Number(account.long_market_value ?? 0),
+      pendingValue: Math.max(
+        0,
+        Number(account.equity) - Number(account.cash) - Number(account.long_market_value ?? 0),
+      ),
     };
   }
 
@@ -440,6 +457,9 @@ export class Runner {
       at: Date.now(),
       price: live.price,
       equity: live.equity,
+      cash: live.cash,
+      heldValue: live.heldValue,
+      pendingValue: live.pendingValue,
       dailyPnl: live.dailyPnl,
       lossLimit: risk.maxDailyLossUsd,
       stopPrice: stop?.stopPrice,

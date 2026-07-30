@@ -22,7 +22,7 @@ const signed = (n, dp = 2) => `${Number(n) >= 0 ? '+' : '−'}$${money(Math.abs(
 
 const toneFor = (n) => (Number(n) > 0 ? 'var(--up-500)' : Number(n) < 0 ? 'var(--down-500)' : 'var(--text-500)');
 
-function Tile({ label, value, sub, tone }) {
+function Tile({ label, value, sub, tone, footer }) {
   return (
     <div
       style={{
@@ -60,6 +60,72 @@ function Tile({ label, value, sub, tone }) {
       {sub && (
         <div style={{ font: '12px var(--font-sans)', color: 'var(--text-500)', marginTop: 4 }}>{sub}</div>
       )}
+      {footer}
+    </div>
+  );
+}
+
+const CAPITAL = [
+  { key: 'cash', label: 'cash', hint: 'spendable', color: 'var(--violet-200)' },
+  { key: 'pendingValue', label: 'pending', hint: 'reserved by resting buys', color: 'var(--violet-400)' },
+  { key: 'heldValue', label: 'held', hint: 'BTC you own', color: 'var(--violet-600)' },
+];
+
+/**
+ * Equity is NOT cash + holdings. Alpaca reports `cash` net of order
+ * reservations while equity includes them, so the two never reconcile on
+ * their own — which is exactly the question this answers.
+ *
+ * Sequential ramp, not categorical: the three parts are ORDERED by how
+ * committed the capital is, so lightness carries the meaning and colour-vision
+ * deficiency cannot scramble it. Every segment is labelled with its own value,
+ * so colour is reinforcement only.
+ */
+function CapitalSplit({ account }) {
+  if (!account) return null;
+  const total = CAPITAL.reduce((sum, p) => sum + Number(account[p.key] ?? 0), 0);
+  if (!(total > 0)) return null;
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div
+        role="img"
+        aria-label={CAPITAL.map((p) => `${p.label} $${money(account[p.key] ?? 0)}`).join(', ')}
+        style={{ display: 'flex', gap: 2, height: 6, marginBottom: 8 }}
+      >
+        {CAPITAL.map((p) => {
+          const v = Number(account[p.key] ?? 0);
+          if (v <= 0) return null;
+          return (
+            <div
+              key={p.key}
+              style={{
+                width: `${(v / total) * 100}%`,
+                background: p.color,
+                borderRadius: 'var(--radius-pill)',
+              }}
+            />
+          );
+        })}
+      </div>
+
+      <dl style={{ margin: 0, display: 'grid', gap: 3 }}>
+        {CAPITAL.map((p) => (
+          <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span
+              aria-hidden="true"
+              style={{ width: 8, height: 8, flex: 'none', borderRadius: 2, background: p.color }}
+            />
+            <dt style={{ font: '12px var(--font-sans)', color: 'var(--text-500)' }}>{p.label}</dt>
+            <dd
+              className="apex-num"
+              style={{ margin: '0 0 0 auto', font: '12px var(--font-mono)', color: 'var(--text-700)' }}
+            >
+              ${money(account[p.key] ?? 0)}
+            </dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }
@@ -332,7 +398,11 @@ export default function Live() {
           }}
         >
           <Tile label={`${s?.status?.symbol ?? 'Price'}`} value={s?.market?.price ? `$${money(s.market.price)}` : '—'} sub={s?.market?.idle ? 'out of band — idling' : 'in band'} />
-          <Tile label="Equity" value={s?.account ? `$${money(s.account.equity)}` : '—'} />
+          <Tile
+            label="Equity"
+            value={s?.account ? `$${money(s.account.equity)}` : '—'}
+            footer={<CapitalSplit account={s?.account} />}
+          />
           <Tile
             label="Realized P&L"
             value={s?.position ? signed(s.position.realizedPnl) : '—'}
