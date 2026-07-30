@@ -1,0 +1,17 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Apex Trader mark">
+  <defs>
+    <linearGradient id="apexTile" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#171A23"></stop>
+      <stop offset="1" stop-color="#0D0F15"></stop>
+    </linearGradient>
+    <linearGradient id="apexStroke" x1="14" y1="46" x2="50" y2="16" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9783FF"></stop>
+      <stop offset="1" stop-color="#7B61FF"></stop>
+    </linearGradient>
+  </defs>
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="15.25" fill="url(#apexTile)" stroke="#7B61FF" stroke-opacity="0.4" stroke-width="1.5"></rect>
+
+  <path d="M14 44 L28 30 L36 38 L50 20" stroke="url(#apexStroke)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+
+  <path d="M44 20 H50 V26" stroke="#7B61FF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>

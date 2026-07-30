@@ -1,103 +1,254 @@
+/* Apex Trader — design tokens for the Next.js app.
+
+   Values are copied verbatim from the Apex Trader design system
+   (claude.ai/design project 0dc922ad, namespace ApexTraderDesignSystem_cd55a5).
+   The canonical source lives in public/prototype/_ds/apex/tokens/*.css —
+   if you change a value there, mirror it here.
+
+   Sora + JetBrains Mono are the intended brand families. Swap the @import
+   for self-hosted .woff2 if you need the app to work offline. */
+
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ─────────────────────────────────────────────────────────────
-   Apex Trader — design tokens.
-
-   Every custom property referenced by the prototype components in
-   app/components/ is declared here. app.jsx overrides the --brand-*
-   and --violet-* values at runtime when the user picks an accent.
-   ───────────────────────────────────────────────────────────── */
-
 :root {
-  /* Surfaces — dark by default; this is a trading UI, not a document. */
-  --bg-app: #090b10;
-  --bg-surface: #0e1119;
-  --bg-raised: #141824;
-  --bg-elevated: #1a1f2e;
-  --bg-inset: #070911;
+  /* ---- Ink canvas (darkest -> lightest) ---- */
+  --ink-950: #06070A;
+  --ink-900: #090B10;
+  --ink-850: #0D0F15;
+  --ink-800: #12141C;
+  --ink-750: #171A23;
+  --ink-700: #1D212C;
+  --ink-600: #262B38;
+  --ink-500: #323847;
 
-  /* Lines */
-  --border: rgba(255, 255, 255, 0.08);
-  --border-soft: rgba(255, 255, 255, 0.05);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --line: rgba(255, 255, 255, 0.08);
-  --line-soft: rgba(255, 255, 255, 0.04);
+  /* ---- Hairlines ---- */
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.15);
 
-  /* Text ramp */
-  --text-900: #f2f4f8;
-  --text-700: #c3c9d6;
-  --text-500: #8b93a5;
-  --text-400: #6a7182;
-  --ink-700: #c3c9d6;
-  --ink-500: #8b93a5;
+  /* ---- Text on dark ---- */
+  --white: #FFFFFF;
+  --text-900: #F5F7FC;
+  --text-700: #C5CAD6;
+  --text-500: #8A91A1;
+  --text-400: #646B7C;
+  --text-300: #474D5C;
 
-  /* Brand — overridden at runtime by applyAccent() in app.jsx */
-  --brand: #7b61ff;
-  --brand-hover: #9783ff;
-  --brand-press: #6849f0;
-  --brand-text: #b7aaff;
-  --brand-surface: rgba(123, 97, 255, 0.13);
-  --brand-border: rgba(123, 97, 255, 0.4);
-  --violet-soft: rgba(123, 97, 255, 0.13);
-  --violet-line: rgba(123, 97, 255, 0.4);
+  /* ---- Brand: Apex Violet ---- */
+  --violet-700: #5436E6;
+  --violet-600: #6849F0;
+  --violet-500: #7B61FF;
+  --violet-400: #9783FF;
+  --violet-300: #B7AAFF;
+  --violet-200: #D6CEFF;
   --violet-glow: rgba(123, 97, 255, 0.35);
+  --violet-soft: rgba(123, 97, 255, 0.13);
+  --violet-line: rgba(123, 97, 255, 0.40);
 
-  /* Market direction */
-  --up-500: #21d07a;
-  --up-soft: rgba(33, 208, 122, 0.14);
-  --down-500: #ff5c5c;
-  --down-soft: rgba(255, 92, 92, 0.14);
+  /* ---- Chart / AI accents ---- */
+  --cyan-500: #29D7D7;
+  --cyan-soft: rgba(41, 215, 215, 0.13);
+  --indigo-500: #4D6BFF;
 
-  /* Status */
-  --info-500: #4d9bff;
-  --info-soft: rgba(77, 155, 255, 0.14);
-  --warning-500: #ffb340;
-  --warning-soft: rgba(255, 179, 64, 0.14);
+  /* ---- Price semantics. Green/red are reserved for price action. ---- */
+  --up-500: #21D08A;
+  --up-400: #3BE3A0;
+  --up-soft: rgba(33, 208, 138, 0.13);
+  --up-line: rgba(33, 208, 138, 0.40);
+  --down-500: #FF4D6A;
+  --down-400: #FF6E85;
+  --down-soft: rgba(255, 77, 106, 0.13);
+  --down-line: rgba(255, 77, 106, 0.40);
 
-  /* Elevation */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-3: 0 8px 28px rgba(0, 0, 0, 0.55);
-  --glow-brand: 0 6px 22px rgba(123, 97, 255, 0.4);
-  --glow-brand-soft: 0 4px 14px rgba(123, 97, 255, 0.22);
+  /* ---- Status ---- */
+  --warning-500: #FFB020;
+  --warning-soft: rgba(255, 176, 32, 0.14);
+  --info-500: #4DA8FF;
+  --info-soft: rgba(77, 168, 255, 0.14);
 
-  /* Radii */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 22px;
+  /* ---- Semantic aliases — prefer these ---- */
+  --bg-app: var(--ink-900);
+  --bg-app-deep: var(--ink-950);
+  --bg-surface: var(--ink-800);
+  --bg-raised: var(--ink-750);
+  --bg-elevated: var(--ink-700);
+  --bg-hover: var(--ink-600);
+  --bg-active: var(--ink-500);
+  --bg-inset: var(--ink-850);
+
+  --border: var(--line);
+  --border-soft: var(--line-soft);
+  --border-strong: var(--line-strong);
+
+  --text-heading: var(--text-900);
+  --text-body: var(--text-700);
+  --text-muted: var(--text-500);
+  --text-faint: var(--text-400);
+  --text-disabled: var(--text-300);
+
+  --brand: var(--violet-500);
+  --brand-hover: var(--violet-400);
+  --brand-press: var(--violet-600);
+  --brand-text: var(--violet-300);
+  --brand-contrast: #FFFFFF;
+  --brand-surface: var(--violet-soft);
+  --brand-border: var(--violet-line);
+
+  --price-up: var(--up-500);
+  --price-up-surface: var(--up-soft);
+  --price-down: var(--down-500);
+  --price-down-surface: var(--down-soft);
+
+  --success: var(--up-500);
+  --danger: var(--down-500);
+  --warning: var(--warning-500);
+  --info: var(--info-500);
+  --focus-ring: var(--violet-400);
+
+  /* ---- Type ---- */
+  --font-sans: 'Sora', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-numeric: var(--font-mono);
+
+  --text-display: 56px;
+  --text-h1: 40px;
+  --text-h2: 30px;
+  --text-h3: 23px;
+  --text-h4: 19px;
+  --text-lg: 17px;
+  --text-base: 15px;
+  --text-sm: 13px;
+  --text-xs: 12px;
+  --text-2xs: 11px;
+
+  --weight-light: 300;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-extrabold: 800;
+
+  --leading-tight: 1.08;
+  --leading-snug: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tighter: -0.03em;
+  --tracking-tight: -0.015em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.02em;
+  --tracking-caps: 0.12em;
+
+  /* ---- Spacing (4px grid) ---- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+  --space-11: 80px;
+  --space-12: 96px;
+  --space-13: 128px;
+
+  --gap-inline: var(--space-2);
+  --gap-tight: var(--space-3);
+  --gap: var(--space-4);
+  --gap-section: var(--space-7);
+  --pad-control: var(--space-3);
+  --pad-card: var(--space-5);
+  --pad-panel: var(--space-6);
+
+  --container-max: 1320px;
+  --sidebar-w: 248px;
+  --topbar-h: 60px;
+
+  /* ---- Radius ---- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
   --radius-pill: 999px;
 
-  /* Type */
-  --font-sans: ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  /* ---- Elevation ---- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 12px 34px rgba(0, 0, 0, 0.55);
+  --shadow-4: 0 24px 60px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--line);
+  --glow-brand: 0 6px 22px rgba(123, 97, 255, 0.40);
+  --glow-brand-soft: 0 0 0 4px var(--violet-soft);
+  --glow-up: 0 0 0 4px var(--up-soft);
+  --glow-down: 0 0 0 4px var(--down-soft);
+  --ring-focus: 0 0 0 2px var(--ink-900), 0 0 0 4px var(--violet-400);
 
-  /* Motion */
+  /* NOTE: a box-shadow, not a length — used as boxShadow on raised surfaces. */
+  --inset-top: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+  /* ---- Motion ---- */
+  --dur-1: 90ms;
+  --dur-2: 150ms;
+  --dur-3: 240ms;
+  --dur-4: 400ms;
+  --dur-tick: 600ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* Layout */
-  --inset-top: env(safe-area-inset-top, 0px);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 html,
 body {
-  padding: 0;
   margin: 0;
+  padding: 0;
   background: var(--bg-app);
-  color: var(--text-900);
+  color: var(--text-body);
   font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-* {
-  box-sizing: border-box;
+h1, h2, h3, h4, h5 {
+  margin: 0;
+  color: var(--text-heading);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-snug);
+}
+
+a { color: var(--brand-text); text-decoration: none; }
+
+::selection { background: var(--violet-soft); color: var(--text-900); }
+
+/* Tabular figures for anything that updates live. */
+.apex-num {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.01em;
+}
+
+/* Ambient brand glow used on app backgrounds. */
+.apex-ambient {
+  background:
+    radial-gradient(900px 500px at 88% -8%, rgba(123, 97, 255, 0.16), transparent 60%),
+    radial-gradient(700px 500px at -6% 6%, rgba(41, 215, 215, 0.07), transparent 55%),
+    var(--bg-app);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }

@@ -1,0 +1,6 @@
+/* Apex Trader webfonts.
+   Sora     — geometric sans, used for all UI + display.
+   JetBrains Mono — tabular monospace, used for prices, tickers, numerics.
+   NOTE: loaded from Google Fonts CDN. These ARE the intended families;
+   swap to self-hosted .woff2 binaries if you need fully offline assets. */
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');

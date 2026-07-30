@@ -1,0 +1,34 @@
+/* ============================================================
+   APEX TRADER — SPACING (4px base grid)
+   ============================================================ */
+:root {
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+  --space-11: 80px;
+  --space-12: 96px;
+  --space-13: 128px;
+
+  /* component rhythm aliases */
+  --gap-inline: var(--space-2);   /* icon <-> label */
+  --gap-tight: var(--space-3);
+  --gap: var(--space-4);
+  --gap-section: var(--space-7);
+
+  --pad-control: var(--space-3);  /* inside buttons/inputs (vertical) */
+  --pad-card: var(--space-5);
+  --pad-panel: var(--space-6);
+
+  /* layout */
+  --container-max: 1320px;
+  --sidebar-w: 248px;
+  --topbar-h: 60px;
+}

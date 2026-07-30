@@ -1,0 +1,42 @@
+/* ============================================================
+   APEX TRADER — BASE
+   Minimal reset + brand defaults. Scoped lightly so cards inherit.
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--text-body);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4, h5 {
+  margin: 0;
+  color: var(--text-heading);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-snug);
+}
+
+a { color: var(--brand-text); text-decoration: none; }
+
+::selection { background: var(--violet-soft); color: var(--text-900); }
+
+/* Branded scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--ink-600) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--ink-600); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--ink-500); }
+
+/* Subtle ambient brand glow used on app/page backgrounds */
+.apex-ambient {
+  background:
+    radial-gradient(900px 500px at 88% -8%, rgba(123, 97, 255, 0.16), transparent 60%),
+    radial-gradient(700px 500px at -6% 6%, rgba(41, 215, 215, 0.07), transparent 55%),
+    var(--bg-app);
+}

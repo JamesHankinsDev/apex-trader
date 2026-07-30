@@ -21,11 +21,15 @@ apex-trader/
 │   ├── backtest/             # backtest harness — empty
 │   └── tests/
 ├── dashboard/                # Next.js 15 App Router
-│   └── app/
-│       ├── page.js           # build-status shell
-│       ├── layout.js
-│       ├── globals.css       # design tokens
-│       └── components/       # mobile prototype — NOT yet mounted (see below)
+│   ├── app/
+│   │   ├── page.js           # build-status shell
+│   │   ├── layout.js
+│   │   └── globals.css       # design tokens (mirrored from the design system)
+│   └── public/prototype/     # vendored Claude Design build — runs as-is
+│       ├── index.html        # React 18 UMD + Babel loader
+│       ├── _ds/apex/         # design system bundle + token CSS
+│       ├── app/              # the 13 prototype components
+│       └── assets/
 └── .github/workflows/test.yml
 ```
 
@@ -45,6 +49,7 @@ Requires Node >= 20.
 ```bash
 npm run bot                  # dry run: validates config, prints the grid
 npm run dashboard            # http://localhost:3000
+                             # http://localhost:3000/prototype  <- mobile UI (mock data)
 npm test                     # all workspace tests
 ```
 
@@ -63,22 +68,41 @@ Risk limits are enforced at startup: `assertWithinRiskLimits()` refuses to run i
 
 **1. Grid engine is partially implemented.** `calculateLevels()`, `assignSides()`, and validation are done and tested. `GridEngine.reconcile()` and `GridEngine.onFill()` throw — they need a live Alpaca client. This is the next build step.
 
-**2. The dashboard prototype is not mounted.** The 13 files in `dashboard/app/components/` came from a browser-based prototype. They cannot be imported by Next.js as-is:
+**2. The prototype UI runs, but on mock data.** `npm run dashboard` then open **http://localhost:3000/prototype**.
 
-- Each is an IIFE that attaches to `window.*` — no `import` or `export` anywhere.
+This is the Claude Design build vendored verbatim — React 18 UMD + Babel-in-browser, components as `window` globals. It is deliberately *outside* the Next.js build (it lives in `public/`, which Next serves as static files). It does not use React 19, Tailwind, or any bundler.
+
+Every number it shows is fake. `app/data.js` is a deterministic mock layer and `window.ApexLive` jitters prices with `Math.random()` on a timer. There are **no network calls in any prototype file** — it cannot show real positions, fills, or P&L.
+
+Treat it as a visual reference, not a dashboard.
+
+**3. The prototype is not ported to Next.js.** The components can't be imported as modules:
+
+- Each is an IIFE attaching to `window.*` — no `import`/`export` anywhere.
 - They read a global `React` rather than importing it.
-- They depend on `window.ApexTraderDesignSystem_cd55a5`, **which does not exist in this repo.** Every reference reads it; nothing defines it. Its `Icon`, `Sparkline`, `Badge`, and `PriceChange` exports need to be sourced or rewritten.
-- They style with inline styles + CSS custom properties, not Tailwind utilities. The tokens are declared in `app/globals.css`; `tailwind.config.js` mirrors them for new work.
+- They style with inline styles + CSS custom properties, not Tailwind utilities.
 
-Porting checklist, per file: unwrap the IIFE → add `import React from 'react'` → replace `window.X` reads with imports → add `'use client'` where hooks are used → `export` the component.
+`window.ApexTraderDesignSystem_cd55a5` is supplied by `_ds/apex/_ds_bundle.js`, which exports `Icon`, `ICON_NAMES`, `Badge`, `PriceChange`, `Sparkline`, `StatCard`, `Tag`, `Button`, `IconButton`, `Input`, `Select`, `Switch`, `Avatar`, `Card`, and `Tabs`.
 
-`ios-frame.jsx` is a standalone device-frame scaffold and is marked `@ds-adherence-ignore`; it can be ported last or dropped.
+Porting checklist, per file: unwrap the IIFE → `import React from 'react'` → replace `window.X` reads with imports → add `'use client'` where hooks are used → `export` the component. Ported files belong in `dashboard/app/components/` (currently empty by design), leaving the prototype intact as a reference.
+
+`ios-frame.jsx` is a standalone device-frame scaffold marked `@ds-adherence-ignore`; port it last or drop it.
+
+### Design tokens
+
+`app/globals.css` mirrors the design system's tokens by hand; the canonical copies are `public/prototype/_ds/apex/tokens/*.css`. **Change a value in one, mirror it to the other.** Brand families are Sora and JetBrains Mono, loaded from Google Fonts — swap for self-hosted `.woff2` if you need offline builds.
+
+Note `--inset-top` is a *box-shadow*, not a length: `inset 0 1px 0 rgba(255,255,255,0.05)`.
+
+Upstream source: `claude.ai/design/p/0dc922ad-d90b-49a0-82c3-a20c7a389ff4`. A second design system (`pennant-design-system-e1dbf999…`) exists in that project but is unused here.
 
 ## Roadmap
 
 - [x] Monorepo + build config
 - [x] Grid level calculation + config validation
+- [x] Design system vendored — prototype UI runs at `/prototype`
+- [ ] Alpaca client + account smoke test (credentials still unverified)
 - [ ] Order placement + fill tracking
 - [ ] Dashboard API endpoints
+- [ ] Port prototype components to ES modules, on real data
 - [ ] 6-month backtest harness
-- [ ] Port prototype components to ES modules

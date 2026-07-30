@@ -1,0 +1,13 @@
+/* ============================================================
+   APEX TRADER — RADIUS
+   Friendly but precise. Pills for tags/avatars, soft cards.
+   ============================================================ */
+:root {
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;   /* buttons, inputs */
+  --radius-lg: 14px;   /* cards */
+  --radius-xl: 20px;   /* panels, modals */
+  --radius-2xl: 28px;
+  --radius-pill: 999px;
+}

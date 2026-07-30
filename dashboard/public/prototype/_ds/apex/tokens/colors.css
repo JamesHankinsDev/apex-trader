@@ -1,0 +1,103 @@
+/* ============================================================
+   APEX TRADER — COLOR SYSTEM
+   Dark-first terminal. Electric violet brand.
+   Green/red are RESERVED for price action — never decorative.
+   ============================================================ */
+:root {
+  /* ---- Ink canvas (backgrounds, darkest -> lightest) ---- */
+  --ink-950: #06070A;   /* deepest void / page behind app */
+  --ink-900: #090B10;   /* app background */
+  --ink-850: #0D0F15;   /* app background, panels */
+  --ink-800: #12141C;   /* card / surface */
+  --ink-750: #171A23;   /* raised surface */
+  --ink-700: #1D212C;   /* elevated / popover */
+  --ink-600: #262B38;   /* hover surface */
+  --ink-500: #323847;   /* active surface / divider strong */
+
+  /* ---- Hairlines & borders ---- */
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.15);
+
+  /* ---- Text (on dark) ---- */
+  --white: #FFFFFF;
+  --text-900: #F5F7FC;  /* headings / high emphasis */
+  --text-700: #C5CAD6;  /* body */
+  --text-500: #8A91A1;  /* secondary / labels */
+  --text-400: #646B7C;  /* muted / captions */
+  --text-300: #474D5C;  /* disabled */
+
+  /* ---- Brand: Apex Violet ---- */
+  --violet-700: #5436E6;
+  --violet-600: #6849F0;  /* press */
+  --violet-500: #7B61FF;  /* base brand */
+  --violet-400: #9783FF;  /* hover (lighter) */
+  --violet-300: #B7AAFF;  /* on-dark text accent */
+  --violet-200: #D6CEFF;
+  --violet-glow: rgba(123, 97, 255, 0.35);
+  --violet-soft: rgba(123, 97, 255, 0.13);
+  --violet-line: rgba(123, 97, 255, 0.40);
+
+  /* ---- Secondary spectrum (charts, AI accents) ---- */
+  --cyan-500: #29D7D7;
+  --cyan-soft: rgba(41, 215, 215, 0.13);
+  --indigo-500: #4D6BFF;
+
+  /* ---- Price semantics (UP / DOWN) ---- */
+  --up-500: #21D08A;    /* gain green */
+  --up-400: #3BE3A0;
+  --up-soft: rgba(33, 208, 138, 0.13);
+  --up-line: rgba(33, 208, 138, 0.40);
+  --down-500: #FF4D6A;  /* loss red */
+  --down-400: #FF6E85;
+  --down-soft: rgba(255, 77, 106, 0.13);
+  --down-line: rgba(255, 77, 106, 0.40);
+
+  /* ---- Status ---- */
+  --warning-500: #FFB020;
+  --warning-soft: rgba(255, 176, 32, 0.14);
+  --info-500: #4DA8FF;
+  --info-soft: rgba(77, 168, 255, 0.14);
+
+  /* ============================================================
+     SEMANTIC ALIASES — prefer these in components & kits
+     ============================================================ */
+  --bg-app: var(--ink-900);
+  --bg-app-deep: var(--ink-950);
+  --bg-surface: var(--ink-800);
+  --bg-raised: var(--ink-750);
+  --bg-elevated: var(--ink-700);
+  --bg-hover: var(--ink-600);
+  --bg-active: var(--ink-500);
+  --bg-inset: var(--ink-850);
+
+  --border: var(--line);
+  --border-soft: var(--line-soft);
+  --border-strong: var(--line-strong);
+
+  --text-heading: var(--text-900);
+  --text-body: var(--text-700);
+  --text-muted: var(--text-500);
+  --text-faint: var(--text-400);
+  --text-disabled: var(--text-300);
+
+  --brand: var(--violet-500);
+  --brand-hover: var(--violet-400);
+  --brand-press: var(--violet-600);
+  --brand-text: var(--violet-300);
+  --brand-contrast: #FFFFFF;
+  --brand-surface: var(--violet-soft);
+  --brand-border: var(--violet-line);
+
+  --price-up: var(--up-500);
+  --price-up-surface: var(--up-soft);
+  --price-down: var(--down-500);
+  --price-down-surface: var(--down-soft);
+
+  --success: var(--up-500);
+  --danger: var(--down-500);
+  --warning: var(--warning-500);
+  --info: var(--info-500);
+
+  --focus-ring: var(--violet-400);
+}

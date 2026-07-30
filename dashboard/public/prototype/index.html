@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Apex Trader — mobile prototype</title>
+
+<!--
+  VENDORED PROTOTYPE — served statically by Next.js from /prototype.
+
+  This is the Claude Design build of the Apex Trader mobile app, running
+  unmodified: React 18 UMD + Babel-in-browser, components as window globals.
+  It is NOT part of the Next.js build and does NOT use React 19 or Tailwind.
+
+  Data is 100% mock (app/data.js). Nothing here talks to Alpaca or the bot.
+  Treat it as a visual reference while porting screens to real components.
+
+  Source: claude.ai/design/p/0dc922ad-d90b-49a0-82c3-a20c7a389ff4
+-->
+
+<!-- Apex Trader design system -->
+<link rel="stylesheet" href="_ds/apex/styles.css">
+
+<!-- React + Babel (pinned, integrity-checked) -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- design system bundle + mock data -->
+<script src="_ds/apex/_ds_bundle.js"></script>
+<script src="app/data.js"></script>
+
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg-app); overflow: hidden; }
+  #root { height: 100vh; }
+  /* chart + motion keyframes used across the app */
+  @keyframes apex-draw { to { stroke-dashoffset: 0; } }
+  @keyframes apex-fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+  @keyframes apex-sheet-in { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes apex-toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  /* hide horizontal scrollbars on insight rails */
+  div::-webkit-scrollbar { height: 0; }
+  @media (prefers-reduced-motion: reduce) {
+    [style*="apex-draw"], [style*="apex-fade"] { animation: none !important; stroke-dashoffset: 0 !important; opacity: 1 !important; }
+  }
+</style>
+</head>
+<body class="apex-ambient">
+<div id="root"></div>
+
+<script>
+  window.TWEAK_DEFAULTS = {
+    "chartView": "Line",
+    "showCopilot": true,
+    "accent": "#7B61FF"
+  };
+</script>
+
+<!-- app (Babel) — order matters: dependencies before consumers -->
+<script type="text/babel" src="app/tweaks-panel.jsx"></script>
+<script type="text/babel" src="app/ios-frame.jsx"></script>
+<script type="text/babel" src="app/charts.jsx"></script>
+<script type="text/babel" src="app/ui.jsx"></script>
+<script type="text/babel" src="app/coin-detail.jsx"></script>
+<script type="text/babel" src="app/screen-home.jsx"></script>
+<script type="text/babel" src="app/screen-assets.jsx"></script>
+<script type="text/babel" src="app/screen-market.jsx"></script>
+<script type="text/babel" src="app/screen-bots.jsx"></script>
+<script type="text/babel" src="app/bot-config.jsx"></script>
+<script type="text/babel" src="app/screen-performance.jsx"></script>
+<script type="text/babel" src="app/app.jsx"></script>
+</body>
+</html>
