@@ -73,6 +73,10 @@ function StatusPill({ snapshot, error }) {
     tone = 'var(--down-500)';
   } else if (snapshot?.status?.halted) {
     word = `halted — ${snapshot.status.halted.replace(/_/g, ' ')}`;
+    tone = 'var(--down-500)';
+  } else if (snapshot?.rejections?.length) {
+    // A grid rejecting every order must never render as a healthy one.
+    word = `${snapshot.rejections.length} order(s) rejected`;
     tone = 'var(--warning-500)';
   } else if (snapshot?.status?.running) {
     word = snapshot.status.dryRun ? 'running — dry run' : 'running — live orders';
@@ -286,6 +290,33 @@ export default function Live() {
             }}
           >
             {error} — start it with <code style={{ fontFamily: 'var(--font-mono)' }}>npm run bot:loop</code>
+          </div>
+        )}
+
+        {/* Rejections sit above everything — they are the loudest failure the
+            bot can have while still appearing to run normally. */}
+        {s?.rejections?.length > 0 && (
+          <div
+            role="alert"
+            style={{
+              padding: '14px 16px',
+              marginBottom: 20,
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--warning-500)',
+              background: 'var(--warning-soft)',
+            }}
+          >
+            <div style={{ font: '600 13px var(--font-sans)', color: 'var(--text-900)' }}>
+              ⚠ The exchange rejected {s.rejections.length} order(s) — the grid is not resting what it intends to.
+            </div>
+            <div style={{ font: '12px var(--font-sans)', color: 'var(--text-500)', marginTop: 4 }}>
+              Stall {s.status.stalls}/{s.status.stallLimit} — the loop halts at {s.status.stallLimit} consecutive.
+            </div>
+            <ul style={{ margin: '10px 0 0', paddingLeft: 18, font: '12px var(--font-mono)', color: 'var(--text-700)' }}>
+              {[...new Set(s.rejections.map((r) => r.reason))].map((reason) => (
+                <li key={reason} style={{ marginBottom: 2 }}>{reason}</li>
+              ))}
+            </ul>
           </div>
         )}
 

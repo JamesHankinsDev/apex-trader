@@ -22,8 +22,17 @@ import { GridEngine, isOutOfBand, parseClientOrderId } from './grid/engine.js';
 export const HALT = Object.freeze({
   DAILY_LOSS: 'daily_loss',
   STOP_PRICE: 'stop_price',
+  STALLED: 'stalled',
   MANUAL: 'manual',
 });
+
+/**
+ * Consecutive ticks that want to place orders and get every one rejected,
+ * before the loop halts. Counting only successes made "the exchange is
+ * refusing everything" render as +0/-0 — identical to a healthy converged
+ * grid. The bot sat there looking fine while placing nothing.
+ */
+export const STALL_LIMIT = 3;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -48,6 +57,10 @@ export class Runner {
     this.startedAt = Date.now();
     this.lastTick = null;
     this.lastError = null;
+    /** Consecutive ticks where every attempted order was rejected. */
+    this.stalls = 0;
+    /** Rejections from the most recent tick, surfaced to the dashboard. */
+    this.lastRejections = [];
     /** Order ids already accounted for, so fills are recorded once. */
     this.seenFills = new Set();
   }
@@ -72,6 +85,8 @@ export class Runner {
         uptimeMs: Date.now() - this.startedAt,
         lastTickAt: t?.at ?? null,
         lastError: this.lastError,
+        stalls: this.stalls,
+        stallLimit: STALL_LIMIT,
       },
       account: t
         ? { equity: t.equity, dailyPnl: t.dailyPnl, lossLimit: t.lossLimit }
@@ -109,6 +124,7 @@ export class Runner {
           }))
         : [],
       fills: e ? e.fills.slice(-50).reverse() : [],
+      rejections: this.lastRejections,
     };
   }
 
@@ -350,6 +366,26 @@ export class Runner {
 
     // 5 — bring the book in line.
     const result = await this.engine.reconcile(live.price);
+    this.lastRejections = result.rejected ?? [];
+
+    // A tick that wanted to place orders and had every one refused is NOT a
+    // converged grid, even though both submit zero. Track it explicitly.
+    const stalled = this.lastRejections.length > 0 && result.submitted.length === 0;
+    this.stalls = stalled ? this.stalls + 1 : 0;
+
+    if (this.stalls >= STALL_LIMIT) {
+      const reasons = [...new Set(this.lastRejections.map((r) => r.reason))];
+      this.logger.warn?.(
+        `[runner] ${this.stalls} consecutive ticks with every order rejected: ${reasons.join(' | ')}`,
+      );
+      await this.halt(HALT.STALLED);
+      return {
+        halted: HALT.STALLED,
+        stalls: this.stalls,
+        rejected: this.lastRejections.length,
+        reasons,
+      };
+    }
 
     const summary = {
       tick: this.ticks,
@@ -364,6 +400,9 @@ export class Runner {
       idle: isOutOfBand(this.engine.config, live.price),
       submitted: result.submitted.length,
       cancelled: result.cancelled.length,
+      rejected: this.lastRejections.length,
+      desired: result.desired ?? 0,
+      stalls: this.stalls,
     };
 
     this.lastTick = summary;
@@ -399,7 +438,9 @@ export class Runner {
     return (
       `[${String(s.tick).padStart(4)}] $${s.price.toFixed(2)}  ` +
       `inv ${s.inventory}  realized ${pnl}  day ${day}/$${s.lossLimit.toFixed(2)}  ` +
-      `+${s.submitted}/-${s.cancelled}${s.idle ? '  IDLE (out of band)' : ''}`
+      `+${s.submitted}/-${s.cancelled}` +
+      (s.rejected ? `  ⚠ ${s.rejected} REJECTED (stall ${s.stalls}/${STALL_LIMIT})` : '') +
+      (s.idle ? '  IDLE (out of band)' : '')
     );
   }
 }

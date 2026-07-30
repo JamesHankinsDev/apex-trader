@@ -232,7 +232,7 @@ export class GridEngine {
    * place by hand in the Alpaca UI is left alone.
    *
    * @param {number} price
-   * @returns {Promise<{submitted:Array, cancelled:Array, kept:number, dryRun:boolean, skipped?:string}>}
+   * @returns {Promise<{submitted:Array, cancelled:Array, rejected:Array, desired:number, kept:number, dryRun:boolean, skipped?:string}>}
    */
   async reconcile(price) {
     if (!Number.isFinite(price) || price <= 0) {
@@ -243,7 +243,7 @@ export class GridEngine {
       // Cancel everything but place nothing — the grid idles out of band.
       const live = await this.#ourOpenOrders();
       const cancelled = await this.#cancelAll(live);
-      return { submitted: [], cancelled, kept: 0, dryRun: this.dryRun, skipped: 'out of band' };
+      return { submitted: [], cancelled, rejected: [], desired: 0, kept: 0, dryRun: this.dryRun, skipped: 'out of band' };
     }
 
     const desired = this.desiredOrders(price);
@@ -279,6 +279,8 @@ export class GridEngine {
       return {
         submitted: toSubmit,
         cancelled: toCancel,
+        rejected: [],
+        desired: desired.length,
         kept: liveByKey.size - (toCancel.length - orphans.length),
         dryRun: true,
       };
@@ -288,6 +290,7 @@ export class GridEngine {
     const cancelled = await this.#cancelAll(toCancel);
 
     const submitted = [];
+    const rejected = [];
     for (const o of toSubmit) {
       try {
         const res = await this.client.submitOrder({
@@ -299,12 +302,22 @@ export class GridEngine {
         });
         submitted.push(res);
       } catch (err) {
-        // One rejected level must not abort the whole reconcile pass.
+        // One rejected level must not abort the whole reconcile pass — but the
+        // rejection must be REPORTED. Counting only successes made a grid
+        // rejecting every order look identical to a converged one (+0/-0).
+        rejected.push({ levelIndex: o.levelIndex, side: o.side, qty: o.qty, price: o.price, reason: err.message });
         this.logger.warn?.(`[grid] level ${o.levelIndex} ${o.side} rejected: ${err.message}`);
       }
     }
 
-    return { submitted, cancelled, kept: liveByKey.size - cancelled.length, dryRun: false };
+    return {
+      submitted,
+      cancelled,
+      rejected,
+      desired: desired.length,
+      kept: liveByKey.size - cancelled.length,
+      dryRun: false,
+    };
   }
 
   /**

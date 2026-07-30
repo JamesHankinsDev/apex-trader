@@ -93,6 +93,20 @@ function bool(key, fallback) {
   throw new EnvError(`Env var ${key} must be true/false, got "${raw}".`);
 }
 
+/**
+ * Per-symbol notional floor, falling back to the global default.
+ * BTC/USD -> MIN_ORDER_NOTIONAL_BTCUSD, then MIN_ORDER_NOTIONAL, then 10.
+ */
+export function minNotionalFor(symbol) {
+  const slug = String(symbol).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const specific = optionalNum(`MIN_ORDER_NOTIONAL_${slug}`);
+  if (specific !== undefined) {
+    if (specific <= 0) throw new EnvError(`MIN_ORDER_NOTIONAL_${slug} must be positive, got ${specific}.`);
+    return specific;
+  }
+  return num('MIN_ORDER_NOTIONAL', 10);
+}
+
 function oneOf(key, allowed, fallback) {
   const value = optional(key, fallback);
   if (!allowed.includes(value)) {
@@ -176,10 +190,15 @@ export function loadEnv() {
       /** Minimum relative size change worth acting on. Suppresses order churn. */
       resizeThreshold: pct('GRID_RESIZE_THRESHOLD', 0.1),
       /**
-       * Quote-currency floor per order. Alpaca enforces ~$10 on crypto and
+       * Quote-currency floor per order. Alpaca enforces this on crypto and
        * does NOT expose it via the assets endpoint, so it cannot be read live.
+       *
+       * $10 is not a guess — `npm run bot:probe` measured it directly from
+       * Alpaca's own rejection text across BTC, ETH, LTC and DOGE, all
+       * uniform. A per-symbol override exists in case that ever diverges:
+       * MIN_ORDER_NOTIONAL_BTCUSD takes precedence over MIN_ORDER_NOTIONAL.
        */
-      minOrderNotional: num('MIN_ORDER_NOTIONAL', 10),
+      minOrderNotional: minNotionalFor(optional('GRID_SYMBOL', 'BTC/USD')),
     },
 
     risk: {

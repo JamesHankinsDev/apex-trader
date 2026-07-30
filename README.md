@@ -61,6 +61,7 @@ Requires Node >= 20.
 npm run bot:check            # read-only: verify Alpaca credentials
 npm run bot                  # one pass: derive the grid, report what it would rest
 npm run bot:loop             # continuous run loop (Ctrl-C to stop)
+npm run bot:probe            # measure exchange notional floors (paper only)
 npm run dashboard            # http://localhost:3000
                              # http://localhost:3000/prototype  <- mobile UI (mock data)
 npm test                     # all workspace tests
@@ -81,6 +82,23 @@ Each tick: read live state → check stops → ingest fills → maybe resize →
 ```
 
 Ordering inside a tick is deliberate: **stops are evaluated before anything is placed**, so a breached limit can never be followed by fresh exposure in the same pass. `reconcile()` is the only thing that submits grid orders — fills are recorded via `recordFill()` for accounting and never re-submitted, otherwise every fill would get two counter-orders.
+
+### Rejections are never silent
+
+Counting only successes made the worst failure mode invisible: a grid whose every order was refused reported `+0/-0` — identical to a healthy converged one. It ran six ticks looking perfectly fine while placing nothing.
+
+Now rejections are counted, named, and escalated:
+
+```
+[   1] $64788.27  inv 0  ...  +0/-0  ⚠ 11 REJECTED (stall 1/3)
+[   2] $64788.27  inv 0  ...  +0/-0  ⚠ 11 REJECTED (stall 2/3)
+[runner] 3 consecutive ticks with every order rejected: cost basis must be >= minimal amount of order 10
+[runner] halted: stalled
+```
+
+A tick counts as stalled when it wanted to place orders and every one was refused. `STALL_LIMIT` consecutive stalls halt the loop with `HALT.STALLED`, quoting the exchange's own reason. A single good tick resets the counter, so a transient rejection never accumulates toward a halt. `/live` raises a banner and the status pill turns amber the moment any rejection appears.
+
+This is the safety net for the *next* undocumented exchange rule, not just this one.
 
 A failed tick is logged and retried rather than killing the process, so a transient 502 doesn't stop an unattended bot. Ctrl-C cancels resting orders before exiting: with the bot stopped nothing would place a counter-order against a fill, so leaving the book resting would let a buy fill with no exit behind it.
 
@@ -172,7 +190,20 @@ Three limits are checked against live numbers rather than static config:
 | cheapest order's cost basis | `MIN_ORDER_NOTIONAL` (a **dollar amount**) |
 | worst-case notional | live buying power |
 
-**The notional floor is the one that catches people.** Alpaca rejects crypto orders under ~$10 cost basis and does *not* publish that in the assets endpoint — `min_order_size` is 0.000015565 BTC (about $1), and clearing it is not enough. A grid at 3.4x the quantity minimum had all 11 levels rejected with `cost basis must be >= minimal amount of order 10`. The binding case is the cheapest order, at the band's lower bound.
+**The notional floor is the one that catches people.** Alpaca rejects crypto orders under a minimum cost basis and does *not* publish it in the assets endpoint — `min_order_size` is 0.000015565 BTC (about $1), and clearing it is not enough. A grid at 3.4x the quantity minimum had all 11 levels rejected with `cost basis must be >= minimal amount of order 10`. The binding case is the cheapest order, at the band's lower bound.
+
+The $10 is **measured, not assumed**. `npm run bot:probe` provokes the rejection and reads the number out of Alpaca's own error text:
+
+```
+BTC/USD    floor $10.00   (probe was $0.50, min qty 0.000015565)
+ETH/USD    floor $10.00   (probe was $0.50, min qty 0.000521991)
+LTC/USD    floor $10.00   (probe was $0.50, min qty 0.022015424)
+DOGE/USD   floor $10.00   (probe was $0.57, min qty 14.209429946)
+```
+
+Probe orders are sized at the asset minimum and priced 50% below market, so they are rejected by construction; if a symbol ever accepts one it cannot fill at that price and is cancelled immediately. The probe refuses to run outside paper mode and verifies nothing was left resting.
+
+Floors are uniform today, but `MIN_ORDER_NOTIONAL_BTCUSD` overrides `MIN_ORDER_NOTIONAL` per symbol if that ever diverges.
 
 With $100 equity at 80% allocation across a ±15% band, that caps you at **5 levels**. Twenty levels means $3 orders and every one bounces. The error names the number that works.
 
