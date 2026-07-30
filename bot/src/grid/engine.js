@@ -453,7 +453,45 @@ export class GridEngine {
       else this.inventory.delete(parsed.levelIndex - 1);
     }
 
+    this.remapInventoryByPrice();
     return this.openInventory;
+  }
+
+  /**
+   * Re-map holdings onto the levels nearest their ENTRY PRICE.
+   *
+   * A level index only means something inside the band that produced it.
+   * Change GRID_BAND_PCT or GRID_LEVELS and index 3 refers to a completely
+   * different price — a position bought at $64,660 would be handed an exit at
+   * $72,700 instead of $66,010. Matching on price keeps an existing position's
+   * exit sensible across a config change.
+   */
+  remapInventoryByPrice() {
+    const remapped = new Map();
+
+    for (const held of this.inventory.values()) {
+      let best = 0;
+      let bestDist = Infinity;
+      for (const lvl of this.levels) {
+        const d = Math.abs(lvl.price - held.price);
+        if (d < bestDist) { bestDist = d; best = lvl.index; }
+      }
+
+      const existing = remapped.get(best);
+      if (existing) {
+        // Two holdings collapsing onto one level merge at a weighted price.
+        const qty = existing.qty + held.qty;
+        remapped.set(best, {
+          qty,
+          price: (existing.price * existing.qty + held.price * held.qty) / qty,
+        });
+      } else {
+        remapped.set(best, { ...held });
+      }
+    }
+
+    this.inventory = remapped;
+    return this.inventory;
   }
 
   /** Cancel every resting order this engine placed, then stop. */

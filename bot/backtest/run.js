@@ -64,15 +64,18 @@ async function runOne({ bars, config, startingCash, feeRate }) {
     minNotional: config.minNotional,
   });
 
-  // The anchor is per-run, so state must not leak in from a live session.
-  const runner = new Runner({ env: backtestEnv(config), client: broker, logger: silent });
-  runner.readAnchorOverride = null;
+  // In-memory anchor store: a backtest must neither read nor write the live
+  // bot/state/anchor.json. It previously did both, via the shared Runner.
+  const anchors = new Map();
+  const state = {
+    readAnchor: (sym) => anchors.get(sym),
+    writeAnchor: (sym, price) => anchors.set(sym, price),
+  };
+
+  const runner = new Runner({ env: backtestEnv(config), client: broker, logger: silent, state });
 
   let ticks = 0;
   let halted = null;
-
-  // Seed the anchor from the first bar rather than any persisted file.
-  process.env.GRID_ANCHOR_MODE = config.anchorMode;
 
   while (broker.advance()) {
     try {
@@ -158,8 +161,12 @@ async function main() {
   const startingCash = Number(args.cash ?? 100);
   const feeRate = Number(args.fee ?? 0.0015);
 
-  const end = new Date(Date.now() - 24 * 3600 * 1000); // yesterday, fully closed
-  const start = new Date(end.getTime() - months * 30 * 24 * 3600 * 1000);
+  // --start/--end pin an explicit window so the same config can be tested
+  // across different market regimes, not just the most recent one.
+  const end = args.end ? new Date(args.end) : new Date(Date.now() - 24 * 3600 * 1000);
+  const start = args.start
+    ? new Date(args.start)
+    : new Date(end.getTime() - months * 30 * 24 * 3600 * 1000);
 
   const bars = await loadBars({
     client,

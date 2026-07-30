@@ -8,7 +8,7 @@
    fills are recorded for accounting via recordFill(), never re-submitted,
    or every fill would get two counter-orders. */
 
-import { writeAnchor, readAnchor } from './utils/state.js';
+import * as liveState from './utils/state.js';
 import {
   normalizeGridConfig,
   assertWithinBuyingPower,
@@ -43,10 +43,16 @@ export class Runner {
    * @param {object} opts.client   Alpaca client
    * @param {object} [opts.logger]
    */
-  constructor({ env, client, logger = console }) {
+  constructor({ env, client, logger = console, state = liveState }) {
     this.env = env;
     this.client = client;
     this.logger = logger;
+    /**
+     * Anchor persistence. Injectable because the backtest drives this same
+     * Runner: with the live module hard-wired, every backtest wrote its
+     * simulated anchor into bot/state/anchor.json and clobbered the real one.
+     */
+    this.state = state;
     this.symbol = env.grid.symbol;
     this.dryRun = env.runtime.dryRun;
 
@@ -208,7 +214,7 @@ export class Runner {
       ratios: { ...this.env.grid, ...this.env.ratios },
       equity: live.equity,
       price: live.price,
-      storedAnchor: readAnchor(this.symbol),
+      storedAnchor: this.state.readAnchor(this.symbol),
       minOrderSize: live.minOrderSize,
       minOrderNotional: this.env.ratios.minOrderNotional,
       buyingPower: live.buyingPower + (this.engine?.heldCost ?? 0),
@@ -236,7 +242,7 @@ export class Runner {
     }
 
     if (raw.derivation) {
-      writeAnchor(this.symbol, raw.derivation.anchor, {
+      this.state.writeAnchor(this.symbol, raw.derivation.anchor, {
         mode: this.env.ratios.anchorMode,
         price: live.price,
       });
@@ -359,7 +365,7 @@ export class Runner {
       ratios: { ...this.env.grid, ...this.env.ratios },
       equity: live.equity,
       price: live.price,
-      storedAnchor: readAnchor(this.symbol),
+      storedAnchor: this.state.readAnchor(this.symbol),
       minOrderSize: live.minOrderSize,
       minOrderNotional: this.env.ratios.minOrderNotional,
       buyingPower: live.buyingPower + this.engine.heldCost,
