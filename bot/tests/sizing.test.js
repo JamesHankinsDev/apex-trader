@@ -218,6 +218,68 @@ test('rejects a grid whose orders fall under the exchange minimum', () => {
   );
 });
 
+// Regression: Alpaca enforces a ~$10 cost-basis floor per crypto order that
+// it does NOT publish in the assets endpoint. A grid at 3.4x the *quantity*
+// minimum had every level rejected in production with
+// "cost basis must be >= minimal amount of order 10".
+test('rejects a grid whose orders fall under the notional floor', () => {
+  assert.throws(
+    () => deriveGridConfig({
+      ratios,                    // 20 levels
+      equity: 100,
+      price: 64850,
+      minOrderSize: 0.000015565, // passes the QUANTITY check...
+      minOrderNotional: 10,      // ...but fails the NOTIONAL one
+      buyingPower: 100,
+    }),
+    (err) => err instanceof SizingError && /notional minimum/.test(err.message),
+  );
+});
+
+test('the notional error names a level count that actually works', () => {
+  let suggested;
+  try {
+    deriveGridConfig({ ratios, equity: 100, price: 64850, minOrderNotional: 10, buyingPower: 100 });
+  } catch (err) {
+    suggested = Number(err.message.match(/at most (\d+) level/)[1]);
+  }
+  assert.ok(suggested >= 2, `expected a usable suggestion, got ${suggested}`);
+
+  // Taking the advice must actually produce a valid grid.
+  const fixed = deriveGridConfig({
+    ratios: { ...ratios, levels: suggested },
+    equity: 100,
+    price: 64850,
+    minOrderNotional: 10,
+    buyingPower: 100,
+  });
+  assert.ok(
+    fixed.orderSize * fixed.lowerBound >= 10,
+    `cheapest order ${(fixed.orderSize * fixed.lowerBound).toFixed(2)} still under $10`,
+  );
+});
+
+test('the notional floor binds on the CHEAPEST level, not the average', () => {
+  // Sized against upperBound, so the lowest level is always the tightest.
+  const cfg = deriveGridConfig({
+    ratios: { ...ratios, levels: 5 },
+    equity: 100,
+    price: 64850,
+    minOrderNotional: 10,
+    buyingPower: 100,
+  });
+  const cheapest = cfg.orderSize * cfg.lowerBound;
+  const dearest = cfg.orderSize * cfg.upperBound;
+  assert.ok(cheapest < dearest);
+  assert.ok(cheapest >= 10, 'every level clears the floor once the cheapest does');
+});
+
+test('the notional check is skipped when no floor is given', () => {
+  assert.doesNotThrow(() =>
+    deriveGridConfig({ ratios, equity: 100, price: 64850, buyingPower: 1e9 }),
+  );
+});
+
 test('rejects a grid that exceeds live buying power', () => {
   assert.throws(
     () => deriveGridConfig({ ratios, equity: 100000, price: 64731, buyingPower: 100 }),

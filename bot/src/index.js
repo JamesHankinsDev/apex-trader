@@ -83,6 +83,7 @@ async function main() {
       price,
       storedAnchor: readAnchor(symbol),
       minOrderSize,
+      minOrderNotional: env.ratios.minOrderNotional,
       buyingPower,
     });
   }

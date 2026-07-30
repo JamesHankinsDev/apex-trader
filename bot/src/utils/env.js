@@ -175,6 +175,11 @@ export function loadEnv() {
       resizeMode: oneOf('GRID_RESIZE_MODE', ['session', 'on_flat', 'on_fill'], 'on_flat'),
       /** Minimum relative size change worth acting on. Suppresses order churn. */
       resizeThreshold: pct('GRID_RESIZE_THRESHOLD', 0.1),
+      /**
+       * Quote-currency floor per order. Alpaca enforces ~$10 on crypto and
+       * does NOT expose it via the assets endpoint, so it cannot be read live.
+       */
+      minOrderNotional: num('MIN_ORDER_NOTIONAL', 10),
     },
 
     risk: {

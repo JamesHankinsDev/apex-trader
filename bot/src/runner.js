@@ -124,16 +124,33 @@ export class Runner {
 
   /** Fetch everything a tick needs in one round of requests. */
   async readLiveState() {
-    const [account, quotes, asset] = await Promise.all([
+    const [account, quotes, asset, open] = await Promise.all([
       this.client.getAccount(),
       this.client.getLatestCryptoQuote(this.symbol),
       this.client.getAsset(this.symbol).catch(() => null),
+      this.client.getOrders({ status: 'open', limit: 500 }).catch(() => []),
     ]);
+
+    // A resting buy already has its cost deducted from buying_power. Comparing
+    // the grid's TOTAL worst case against what's left double-counts the grid's
+    // own orders: place 3 of 5 levels and the next tick sees the remaining
+    // capacity and refuses to place level 4. Add our own reservations back to
+    // get true capacity. Orders placed by hand are deliberately NOT added back
+    // — that capital really is spoken for.
+    let reserved = 0;
+    for (const o of open) {
+      if (o.symbol !== this.symbol) continue;
+      if (!parseClientOrderId(o.client_order_id)) continue;
+      if (o.side !== 'buy') continue;
+      reserved += Number(o.qty) * Number(o.limit_price);
+    }
 
     return {
       account,
       equity: Number(account.equity),
-      buyingPower: Number(account.buying_power),
+      buyingPower: Number(account.buying_power) + reserved,
+      rawBuyingPower: Number(account.buying_power),
+      reserved,
       // Alpaca carries the prior session's closing equity, so daily P&L needs
       // no local bookkeeping and survives restarts for free.
       dailyPnl: Number(account.equity) - Number(account.last_equity),
@@ -152,6 +169,7 @@ export class Runner {
       price: live.price,
       storedAnchor: readAnchor(this.symbol),
       minOrderSize: live.minOrderSize,
+      minOrderNotional: this.env.ratios.minOrderNotional,
       buyingPower: live.buyingPower,
       openInventory,
     });
@@ -301,6 +319,7 @@ export class Runner {
       price: live.price,
       storedAnchor: readAnchor(this.symbol),
       minOrderSize: live.minOrderSize,
+      minOrderNotional: this.env.ratios.minOrderNotional,
       buyingPower: live.buyingPower,
       openInventory: this.engine.openInventory,
     });

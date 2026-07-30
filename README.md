@@ -162,9 +162,21 @@ order size  = (equity × GRID_ALLOCATION_PCT) / (levels × upperBound)
 daily stop  = equity × MAX_DAILY_LOSS_PCT
 ```
 
-Equity, buying power, market price, and the exchange's `min_order_size` are all read from Alpaca at startup. Two limits are then checked against live numbers rather than static config: the derived order size must clear the exchange minimum, and worst-case notional must fit inside actual buying power.
+Equity, buying power, market price, and the exchange's `min_order_size` are all read from Alpaca at startup. `MAX_POSITION_USD` no longer exists — live buying power replaced it.
 
-`MAX_POSITION_USD` no longer exists — live buying power replaced it.
+Three limits are checked against live numbers rather than static config:
+
+| Check | Against |
+|---|---|
+| derived order size | the asset's `min_order_size` (a **quantity**) |
+| cheapest order's cost basis | `MIN_ORDER_NOTIONAL` (a **dollar amount**) |
+| worst-case notional | live buying power |
+
+**The notional floor is the one that catches people.** Alpaca rejects crypto orders under ~$10 cost basis and does *not* publish that in the assets endpoint — `min_order_size` is 0.000015565 BTC (about $1), and clearing it is not enough. A grid at 3.4x the quantity minimum had all 11 levels rejected with `cost basis must be >= minimal amount of order 10`. The binding case is the cheapest order, at the band's lower bound.
+
+With $100 equity at 80% allocation across a ±15% band, that caps you at **5 levels**. Twenty levels means $3 orders and every one bounces. The error names the number that works.
+
+Buying power needs one more correction: a resting buy already has its cost deducted, so comparing the grid's total worst case against what's left double-counts the grid's own orders — place 3 of 5 levels and the next tick refuses level 4. `readLiveState()` adds our own reservations back. Orders you placed by hand are deliberately *not* added back; that capital really is spoken for.
 
 ### ⚠️ Anchor mode is a strategy decision
 

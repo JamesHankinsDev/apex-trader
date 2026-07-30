@@ -162,6 +162,84 @@ test('the stop does not fire when flat', async () => {
   assert.equal(s.halted, undefined, 'nothing held, nothing to stop out of');
 });
 
+// ---- buying power accounting ----------------------------------------------
+
+// Regression: resting buys have their cost deducted from buying_power, so
+// comparing the grid's TOTAL worst case against what's left double-counts the
+// grid's own orders. In production this placed 3 of 5 levels, then failed
+// every subsequent tick with "exceeds live buying power".
+test('our own resting orders are added back to buying power', async () => {
+  const open = [
+    {
+      id: 'a', symbol: 'BTC/USD', side: 'buy',
+      client_order_id: buildClientOrderId('BTC/USD', 0, 'buy', 1),
+      qty: '0.0002', limit_price: '55000', status: 'open',
+    },
+    {
+      id: 'b', symbol: 'BTC/USD', side: 'buy',
+      client_order_id: buildClientOrderId('BTC/USD', 1, 'buy', 2),
+      qty: '0.0002', limit_price: '60000', status: 'open',
+    },
+  ];
+  // Alpaca reports what's LEFT after those reservations.
+  const client = fakeClient({ equity: 100, open });
+  const r = new Runner({ env: env(), client, logger: quiet });
+
+  const live = await r.readLiveState();
+
+  assert.ok(Math.abs(live.reserved - 23) < 1e-6, '0.0002*55000 + 0.0002*60000');
+  assert.equal(live.rawBuyingPower, 100);
+  assert.ok(Math.abs(live.buyingPower - 123) < 1e-6, 'reservations restored');
+});
+
+test('orders placed by hand are NOT added back', async () => {
+  const open = [
+    { id: 'manual', symbol: 'BTC/USD', side: 'buy', client_order_id: 'my-own', qty: '1', limit_price: '60000', status: 'open' },
+  ];
+  const r = new Runner({ env: env(), client: fakeClient({ equity: 100, open }), logger: quiet });
+
+  const live = await r.readLiveState();
+
+  assert.equal(live.reserved, 0, 'that capital really is spoken for');
+  assert.equal(live.buyingPower, 100);
+});
+
+test('resting sells do not inflate buying power', async () => {
+  const open = [
+    {
+      id: 's', symbol: 'BTC/USD', side: 'sell',
+      client_order_id: buildClientOrderId('BTC/USD', 4, 'sell', 3),
+      qty: '0.0002', limit_price: '70000', status: 'open',
+    },
+  ];
+  const r = new Runner({ env: env(), client: fakeClient({ equity: 100, open }), logger: quiet });
+
+  const live = await r.readLiveState();
+  assert.equal(live.reserved, 0, 'a sell reserves inventory, not cash');
+});
+
+test('a partially placed grid still converges on the next tick', async () => {
+  // The exact production failure: 3 of 5 levels resting, buying power drained.
+  const placed = [0, 1, 2].map((i) => ({
+    id: `o${i}`, symbol: 'BTC/USD', side: 'buy',
+    client_order_id: buildClientOrderId('BTC/USD', i, 'buy', i + 1),
+    qty: '0.000214642', limit_price: String(55000 + i * 4500), status: 'open',
+  }));
+  const reserved = placed.reduce((s, o) => s + Number(o.qty) * Number(o.limit_price), 0);
+
+  const client = fakeClient({ equity: 100, open: placed });
+  client.getAccount = async () => ({
+    equity: '100',
+    last_equity: '100',
+    buying_power: String(100 - reserved), // what Alpaca actually reports
+  });
+
+  const r = new Runner({ env: { ...env(), grid: { symbol: 'BTC/USD', levels: 5, spacing: 'geometric' } }, client, logger: quiet });
+
+  const s = await r.tick();
+  assert.equal(s.halted, undefined, 'must not stall on its own reservations');
+});
+
 // ---- fills are recorded once, and placed only by reconcile ----------------
 
 test('a fill is recorded once and never double-counted', async () => {

@@ -143,6 +143,14 @@ export class GridEngine {
     this.fills = [];
     this.realizedPnl = 0;
     this.nonce = 0;
+    /**
+     * Alpaca remembers a client_order_id forever, including for cancelled
+     * orders. A counter that restarts at 0 every process therefore collides
+     * with the previous run's ids and the whole first tick is rejected with
+     * "client_order_id must be unique". Scoping the counter to a per-process
+     * run id keeps ids unique across restarts.
+     */
+    this.runId = Date.now().toString(36);
   }
 
   /** Display plan — levels with sides assigned. */
@@ -287,7 +295,7 @@ export class GridEngine {
           side: o.side,
           qty: o.qty,
           limitPrice: o.price,
-          clientOrderId: buildClientOrderId(this.config.symbol, o.levelIndex, o.side, ++this.nonce),
+          clientOrderId: buildClientOrderId(this.config.symbol, o.levelIndex, o.side, `${this.runId}${++this.nonce}`),
         });
         submitted.push(res);
       } catch (err) {
@@ -368,7 +376,7 @@ export class GridEngine {
           this.config.symbol,
           counter.levelIndex,
           counter.side,
-          ++this.nonce,
+          `${this.runId}${++this.nonce}`,
         ),
       });
     } catch (err) {

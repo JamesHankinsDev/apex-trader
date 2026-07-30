@@ -198,8 +198,9 @@ export function deriveOrderSize({ equity, allocationPct, levels, upperBound }) {
  * @param {number} opts.equity       live account equity
  * @param {number} opts.price        live market price
  * @param {number} [opts.storedAnchor]
- * @param {number} [opts.minOrderSize]  live from Alpaca's asset metadata
- * @param {number} [opts.buyingPower]   live; checked against worst case
+ * @param {number} [opts.minOrderSize]      live from Alpaca's asset metadata
+ * @param {number} [opts.minOrderNotional]  quote-currency floor per order (~$10)
+ * @param {number} [opts.buyingPower]       live; checked against worst case
  * @returns {object} shape accepted by normalizeGridConfig(), plus derivation notes
  */
 export function deriveGridConfig({
@@ -208,6 +209,7 @@ export function deriveGridConfig({
   price,
   storedAnchor,
   minOrderSize,
+  minOrderNotional,
   buyingPower,
   openInventory = 0,
 }) {
@@ -246,6 +248,32 @@ export function deriveGridConfig({
     );
   }
 
+  // Live constraint: a SEPARATE notional floor, in quote currency.
+  //
+  // Alpaca enforces a minimum cost basis per crypto order (~$10) that it does
+  // NOT publish in the assets endpoint — min_order_size is a quantity, and
+  // clearing it is not sufficient. Discovered the hard way: a grid whose
+  // orders were 3.4x the quantity minimum had every level rejected with
+  // "cost basis must be >= minimal amount of order 10".
+  //
+  // The binding case is the CHEAPEST order, which sits at lowerBound.
+  if (Number.isFinite(minOrderNotional) && minOrderNotional > 0) {
+    const cheapest = sizing.orderSize * lowerBound;
+    if (cheapest < minOrderNotional) {
+      const maxLevels = Math.floor(
+        (sizing.deployable * lowerBound) / (upperBound * minOrderNotional),
+      );
+      throw new SizingError(
+        `Cheapest order would be $${cheapest.toFixed(2)} (at the $${lowerBound.toFixed(2)} level), ` +
+          `below the $${minOrderNotional.toFixed(2)} exchange notional minimum. ` +
+          `With $${equity.toFixed(2)} equity at ${(allocationPct * 100).toFixed(0)}% allocation ` +
+          `across this band you can support at most ${maxLevels} level(s), not ${levels}. ` +
+          `Reduce GRID_LEVELS to ${maxLevels}, raise GRID_ALLOCATION_PCT, narrow GRID_BAND_PCT, ` +
+          `or fund the account.`,
+      );
+    }
+  }
+
   // Live constraint: don't plan a grid the account cannot actually fund.
   if (Number.isFinite(buyingPower) && sizing.worstCaseNotional > buyingPower) {
     throw new SizingError(
@@ -272,7 +300,9 @@ export function deriveGridConfig({
       deployable: sizing.deployable,
       worstCaseNotional: sizing.worstCaseNotional,
       minOrderSize,
+      minOrderNotional,
       buyingPower,
+      cheapestOrderUsd: sizing.orderSize * lowerBound,
     }),
   };
 }
