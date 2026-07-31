@@ -258,12 +258,22 @@ function CapitalSplit({ snapshot }) {
   );
 }
 
-function StatusPill({ snapshot, error }) {
+function StatusPill({ snapshot, error, waitedMs }) {
   let word = 'connecting';
   let tone = 'var(--text-400)';
 
   if (error) {
     word = 'bot offline';
+    tone = 'var(--down-500)';
+  } else if (!snapshot) {
+    // Never let "connecting" sit there forever saying nothing. If the first
+    // poll has not returned in a few seconds, that IS the diagnosis.
+    if (waitedMs > 6000) {
+      word = 'no response from /api/bot/state';
+      tone = 'var(--down-500)';
+    }
+  } else if (!snapshot.status) {
+    word = 'unexpected response shape';
     tone = 'var(--down-500)';
   } else if (snapshot?.status?.halted) {
     word = `halted — ${snapshot.status.halted.replace(/_/g, ' ')}`;
@@ -275,6 +285,11 @@ function StatusPill({ snapshot, error }) {
   } else if (snapshot?.status?.running) {
     word = snapshot.status.dryRun ? 'running — dry run' : 'running — live orders';
     tone = snapshot.status.dryRun ? 'var(--info-500)' : 'var(--up-500)';
+  } else {
+    // Reached the bot, but its loop is not running and it is not halted.
+    // This used to fall through to "connecting", which hid the problem.
+    word = `reachable, not running (tick ${snapshot.status.ticks ?? 0})`;
+    tone = 'var(--warning-500)';
   }
 
   return (
@@ -416,6 +431,8 @@ function Fills({ snapshot }) {
 export default function Live() {
   const [snapshot, setSnapshot] = useState(null);
   const [error, setError] = useState(null);
+  const [startedAt] = useState(() => Date.now());
+  const [waitedMs, setWaitedMs] = useState(0);
 
   const poll = useCallback(async () => {
     try {
@@ -431,6 +448,12 @@ export default function Live() {
       setError(err.message);
     }
   }, []);
+
+  // Drives the "no response" cutoff above.
+  useEffect(() => {
+    const id = setInterval(() => setWaitedMs(Date.now() - startedAt), 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
 
   useEffect(() => {
     poll();
@@ -470,7 +493,7 @@ export default function Live() {
             </div>
             <h1 style={{ font: '700 30px var(--font-sans)', letterSpacing: '-0.03em', marginTop: 4 }}>Live</h1>
           </div>
-          <StatusPill snapshot={s} error={error} />
+          <StatusPill snapshot={s} error={error} waitedMs={waitedMs} />
         </header>
 
         {error && (
@@ -486,7 +509,12 @@ export default function Live() {
               color: 'var(--text-900)',
             }}
           >
-            {error} — start it with <code style={{ fontFamily: 'var(--font-mono)' }}>npm run bot:loop</code>
+            <strong>{error}</strong>
+            <div style={{ font: '12px var(--font-sans)', color: 'var(--text-500)', marginTop: 6 }}>
+              The dashboard proxies to <code style={{ fontFamily: 'var(--font-mono)' }}>BOT_API_URL</code> and
+              attaches <code style={{ fontFamily: 'var(--font-mono)' }}>BOT_API_TOKEN</code>, both server-side.
+              On Vercel, adding env vars does not affect the running deployment — you must redeploy.
+            </div>
           </div>
         )}
 
@@ -514,6 +542,20 @@ export default function Live() {
                 <li key={reason} style={{ marginBottom: 2 }}>{reason}</li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {s?.status?.lastError && (
+          <div
+            role="status"
+            style={{
+              padding: '10px 14px', marginBottom: 16,
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--warning-500)', background: 'var(--warning-soft)',
+              font: '12px var(--font-mono)', color: 'var(--text-900)',
+            }}
+          >
+            last tick error: {s.status.lastError.message}
           </div>
         )}
 
