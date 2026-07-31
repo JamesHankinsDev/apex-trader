@@ -9,8 +9,12 @@
 
 export const dynamic = 'force-dynamic';
 
-const BOT_URL = process.env.BOT_API_URL ?? 'http://localhost:4000';
-const BOT_TOKEN = process.env.BOT_API_TOKEN; // server-only — no NEXT_PUBLIC_
+// TRIM BOTH. Pasting into a hosting provider's UI routinely picks up a
+// trailing newline or space, and the bot trims its own API_TOKEN — so an
+// untrimmed value here fails the length check and returns 401 with no clue
+// why. A trailing slash on the URL would likewise produce a double slash.
+const BOT_URL = (process.env.BOT_API_URL ?? 'http://localhost:4000').trim().replace(/\/+$/, '');
+const BOT_TOKEN = process.env.BOT_API_TOKEN?.trim(); // server-only — no NEXT_PUBLIC_
 
 /** Only these may be reached through the proxy. */
 const ALLOWED = new Set(['health', 'state', 'grid', 'position', 'fills']);
@@ -31,6 +35,22 @@ export async function GET(request, { params }) {
     });
 
     const body = await res.json().catch(() => ({ error: 'Bot returned a non-JSON response.' }));
+
+    // A bare "Unauthorized" is undiagnosable. Report the LENGTH we sent (never
+    // the value) — compared against the bot's startup log, a mismatch is
+    // obvious immediately.
+    if (res.status === 401) {
+      return Response.json(
+        {
+          error: BOT_TOKEN
+            ? `Bot rejected the token. Proxy sent ${BOT_TOKEN.length} characters — compare with the bot's startup log, which prints the length it expects.`
+            : 'BOT_API_TOKEN is not set on this deployment. Note that adding env vars on Vercel does not affect a running deployment until you redeploy.',
+          hint: 'token-mismatch',
+        },
+        { status: 401 },
+      );
+    }
+
     return Response.json(body, { status: res.status });
   } catch (err) {
     // The bot being down is an expected state, not a crash.

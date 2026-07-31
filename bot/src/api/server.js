@@ -134,7 +134,11 @@ export function createApiServer({
         server.listen(port, bindHost, () => {
           logger.info?.(
             `[api] listening on http://${bindHost}:${port}` +
-              (requireAuth ? ' (token required)' : ' (localhost only — no API_TOKEN set)'),
+              (requireAuth
+                // Length only — enough to diagnose a truncated or whitespace-
+                // padded paste without printing a secret into platform logs.
+                ? ` (token required, ${token.length} chars)`
+                : ' (localhost only — no API_TOKEN set)'),
           );
           resolve(server);
         });
