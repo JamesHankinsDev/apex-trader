@@ -27,6 +27,23 @@ const roundQty = (q) => Number(q.toFixed(QTY_DP));
 /** Round DOWN — never ask the exchange for more of an asset than we hold. */
 const floorQty = (q) => Math.floor(q * 10 ** QTY_DP) / 10 ** QTY_DP;
 
+/**
+ * Largest residue that still counts as "fully closed", as a fraction of the
+ * position being closed.
+ *
+ * A closing fill can come back a hair under what we recorded: the exchange
+ * takes its fee out of the delivered asset and reports quantities at its own
+ * precision, so the exit is floored to what is actually sellable. The
+ * left-over is nanoscopic and can never be sold — it is below every exchange
+ * minimum — but it is still a non-zero number in a Map.
+ *
+ * That matters far more than its size suggests. `openInventory` is what gates
+ * re-anchoring and resizing, so a single nano-unit of dust reads as "still
+ * holding" and freezes the band for the rest of the run. See the regression
+ * test in tests/dust.test.js.
+ */
+const DUST_FRACTION = 1e-6;
+
 /** BTC/USD -> BTCUSD, so it's safe inside a client_order_id. */
 const slug = (symbol) => symbol.replace(/[^A-Za-z0-9]/g, '');
 
@@ -395,7 +412,12 @@ export class GridEngine {
       // The fee is taken out of the BTC delivered, so less lands than was
       // ordered. Recording the ordered amount overstates what we hold and what
       // we can sell. `cost` is the cash that actually left.
-      const received = roundQty(qty * (1 - this.feeRate));
+      //
+      // FLOOR, never round. Rounding up here records a position fractionally
+      // larger than the exchange actually delivered, so the exit gets scaled
+      // down to the real balance and can never fully close the level — it
+      // leaves dust that pins openInventory above zero forever.
+      const received = floorQty(qty * (1 - this.feeRate));
       const cost = qty * price;
       this.feesPaidBase += qty - received;
       fill.received = received;
@@ -421,8 +443,16 @@ export class GridEngine {
         const net = gross * (1 - this.feeRate);
         this.feesPaidQuote += gross - net;
 
+        // An unsellable residue is rounding dust, not a position. Leaving it
+        // in the Map keeps the level marked held, which blocks re-anchoring
+        // and resizing permanently — the level is also never re-bought.
+        const remaining = roundQty(held.qty - qty);
+        const closed = held.qty <= 0 || remaining <= held.qty * DUST_FRACTION;
+
         // Release cost proportionally, so a partial exit books partial cost.
-        const share = held.qty > 0 ? Math.min(1, qty / held.qty) : 1;
+        // A dust-closed level releases ALL of it, or the residual cost would
+        // be stranded and realized P&L would drift low by that amount.
+        const share = closed ? 1 : Math.min(1, qty / held.qty);
         const costOut = (held.cost ?? held.qty * held.price) * share;
 
         const pnl = net - costOut;
@@ -431,9 +461,9 @@ export class GridEngine {
         fill.grossPnl = gross - costOut;
         fill.closedLevel = openedAt;
 
-        if (share >= 1) this.inventory.delete(openedAt);
+        if (closed) this.inventory.delete(openedAt);
         else this.inventory.set(openedAt, {
-          qty: held.qty - qty,
+          qty: remaining,
           price: held.price,
           cost: (held.cost ?? held.qty * held.price) - costOut,
         });
