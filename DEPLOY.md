@@ -58,8 +58,9 @@ Skip this and the container filesystem resets on every deploy, which wipes:
 
 - `anchor.json` — the grid silently re-centres on whatever price it restarts at, **including while holding a position**, which is exactly what `on_flat` exists to prevent
 - `halt.json` — **a price stop is defeated by a redeploy.** The bot liquidates, halts, redeploys flat, re-anchors on the crashed price, and buys back in
+- `peak.json` — **the drawdown stop rebases on the bottom.** A bot already 19% down redeploys, takes the current balance as its new high-water mark, and the stop it was seconds away from hitting never fires
 
-The halt latch is only a real safety mechanism if it outlives the container.
+A latch or a high-water mark is only a real safety mechanism if it outlives the container.
 
 Confirm Railway's app root is `/app` (Settings → shows the working directory). If it differs, adjust the mount path to `<root>/bot/state`.
 

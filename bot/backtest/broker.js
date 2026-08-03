@@ -47,6 +47,15 @@ export class SimBroker {
 
     this.cash = startingCash;
     this.startingEquity = startingCash;
+    /**
+     * Prior session's closing equity, which is what Alpaca's `last_equity`
+     * means and what the daily loss stop measures against. This used to be
+     * pinned to startingEquity, which quietly turned dailyPnl into TOTAL P&L
+     * and made every per-day rule untestable — the backtest was measuring a
+     * different stop from the one that runs in production.
+     */
+    this.lastEquity = startingCash;
+    this.day = null;
     this.position = 0;
     /** Weighted average cost of the held base asset, for P&L reporting. */
     this.costBasis = 0;
@@ -97,7 +106,7 @@ export class SimBroker {
   async getAccount() {
     return {
       equity: String(this.equity()),
-      last_equity: String(this.startingEquity),
+      last_equity: String(this.lastEquity),
       cash: String(this.cash),
       buying_power: String(Math.max(0, this.cash - this.reservedCash())),
       long_market_value: String(this.position * this.price),
@@ -202,8 +211,16 @@ export class SimBroker {
    */
   advance() {
     if (this.index >= this.bars.length - 1) return false;
+
+    // Sample the prior session's close BEFORE this bar trades, so last_equity
+    // means what Alpaca means by it rather than "equity mid-session".
+    const priorClose = this.equity();
     this.index++;
     const b = this.bar;
+
+    const day = String(b.t).slice(0, 10);
+    if (this.day !== null && day !== this.day) this.lastEquity = priorClose;
+    this.day = day;
 
     // OHLC hides the intrabar path. On a down bar assume the low came first,
     // so buys are touched before sells; on an up bar, the reverse.

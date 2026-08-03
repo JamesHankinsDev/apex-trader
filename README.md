@@ -28,7 +28,7 @@ apex-trader/
 │   │       ├── env.js        # env loading + safety interlocks
 │   │       └── state.js      # anchor persistence
 │   ├── backtest/             # backtest harness — empty
-│   └── tests/                # 84 tests
+│   └── tests/                # 162 tests
 ├── dashboard/                # Next.js 15 App Router
 │   ├── app/
 │   │   ├── page.js           # build-status shell
@@ -103,6 +103,20 @@ A tick counts as stalled when it wanted to place orders and every one was refuse
 
 This is the safety net for the *next* undocumented exchange rule, not just this one.
 
+### Idling is not the same as working
+
+Out of band while **flat** costs nothing — the grid is waiting to re-anchor. Out of band while **holding** is capital locked in a position with no exit resting against it, and it is the state `on_flat` deliberately accepts as the price of never averaging into a fall.
+
+The problem was that it looked identical to a healthy bot. Over the bundled datasets the grid spent **40–44% of a six-month run** idle-while-holding, with unbroken stretches of 44 and 58 days, while `/health` reported `ok` and the log said nothing but `IDLE`.
+
+```
+[ 412] $2801.58  inv 0.0154  realized +$13.50  day +$0.00/$-50.00  +0/-0  ⚠ IDLE HOLDING 0.0154 for 3.2d
+```
+
+`/health` gains `degraded`, `idleHolding` and `idleMs`, and `IDLE_ALERT_HOURS` (default 24) sets when `degraded` trips.
+
+**It deliberately does not halt, and does not fail the probe.** An idle grid recovers by itself the moment price re-enters the band it still holds exit levels for. Halting would turn a temporary pause into a permanent one needing a human, and failing `/health` would have the platform restart a bot that is working as designed — a restart loop is worse than the thing being reported. Alert on `degraded`.
+
 A failed tick is logged and retried rather than killing the process, so a transient 502 doesn't stop an unattended bot. Ctrl-C cancels resting orders before exiting: with the bot stopped nothing would place a counter-order against a fill, so leaving the book resting would let a buy fill with no exit behind it.
 
 ## Dashboard API
@@ -111,7 +125,7 @@ A failed tick is logged and retried rather than killing the process, so a transi
 
 | Route | Returns |
 |---|---|
-| `/health` | running, halted, dryRun, ticks, uptime — **always open**, for platform probes |
+| `/health` | running, halted, dryRun, ticks, uptime, degraded, idleHolding, idleMs — **always open**, for platform probes |
 | `/state` | full snapshot: account, market, grid, position, book, ladder, fills |
 | `/grid` | config + ladder + desired book |
 | `/position` | inventory, held levels, realized P&L |
@@ -144,6 +158,18 @@ It drives the **real** `Runner`, and therefore the real engine, sizing, rebalanc
 - `buying_power` reported net of resting buys
 - `qty_available` reported net of resting sells
 - `client_order_id` uniqueness
+- `last_equity` rolling at **day boundaries**, not pinned to the opening balance
+
+That last one mattered more than it looks. Pinned, `equity − last_equity` is total P&L since the run began rather than the day's move, so the daily stop in simulation was a different rule from the one in production and no per-day logic could be tested at all.
+
+**Stops default off in the backtest, and that's a measurement decision.** A halt is terminal — production latches it to disk and waits for `npm run bot:resume` — so one bad day ends a six-month run and the result reports "time until the first 5% day" rather than how the grid performed. Turn them on to evaluate the stops themselves:
+
+```bash
+npm run bot:backtest -- --drawdown 0.20            # arm the drawdown stop
+npm run bot:backtest -- --daily 0.05 --stop 0.10   # arm the other two
+```
+
+The header always states which stops were active, so a run can't quietly look like it was protected when it wasn't.
 
 **What it can and cannot prove.** It replays real *prices*, so it exercises grid logic over many cycles. It cannot discover new exchange *behaviours* — the broker only knows rules we have already learned. Every bug found live so far was an integration bug, not a logic one.
 
@@ -155,7 +181,7 @@ Step-by-step for Railway (bot) + Vercel (dashboard): **[DEPLOY.md](DEPLOY.md)**.
 
 Three things there are easy to miss and each has teeth:
 
-- **A volume at `bot/state`** — without it every redeploy wipes the anchor *and* the halt latch, so a price stop is defeated by a deploy
+- **A volume at `bot/state`** — without it every redeploy wipes the anchor, the halt latch *and* the equity high-water mark, so a price stop is defeated by a deploy and the drawdown stop rebases on whatever the balance happens to be
 - **`API_TOKEN`** — without it the API binds `127.0.0.1` and Vercel cannot reach it at all
 - **One replica** — two both run `reconcile()` against the same account and double every order
 
@@ -229,23 +255,33 @@ The idling is the feature. It's what stops the grid buying all the way down a tr
 
 The anchor is persisted to `bot/state/anchor.json` (gitignored) so a restart doesn't silently re-centre a `session` grid.
 
-### Two stops, both scaled to the portfolio
+### Three stops, all scaled to the portfolio
 
-They catch different failures, and neither is an absolute number you have to maintain.
+They catch different failures, and none is an absolute number you have to maintain.
 
 | | Scales from | Limits | Default |
 |---|---|---|---|
 | `MAX_DAILY_LOSS_PCT` | live equity | how **fast** you lose | 5% |
+| `MAX_DRAWDOWN_PCT` | the equity peak | how **much** you give back in total | 20% |
 | `GRID_STOP_PCT` | the band | how **far** one position runs against you | off |
 
 ```
 daily stop = equity     × MAX_DAILY_LOSS_PCT     -$5 at $100, -$500 at $10k
+drawdown   = (peak − equity) / peak              vs MAX_DRAWDOWN_PCT
 stop price = lowerBound × (1 − GRID_STOP_PCT)    moves whenever the band moves
 ```
 
 Daily P&L comes from Alpaca's `last_equity` (prior session close), so it needs no local bookkeeping and survives restarts for free.
 
-**On breach they behave differently, on purpose.** The daily stop cancels resting orders and halts but *keeps the position* — halting is not the same as liquidating, and forcing an exit on a fast drawdown is usually the wrong reflex. The price stop does liquidate, with a market order, because its whole purpose is to bound a single position's loss.
+**Why a drawdown stop exists at all.** The daily stop resets every session, which makes it blind to a slow grind: −3% a day for ten days is a quarter of the account and never reaches a 5% daily limit. That isn't hypothetical — over the bundled 2026 BTC window the bot drew down 7.5% peak-to-trough with no single day worse than −3.1%, so the daily stop never fired once. The drawdown stop measures against the equity high-water mark instead, which is the only way to see it.
+
+20% is calibrated to sit *above* every drawdown observed in normal operation (BTC peaked at 8.4%, ETH at 16.3%) so it doesn't interrupt a working grid. Tightening it to 15% halts the ETH 2024 run near the bottom and turns −7.45% into −13.73%, because the recovery never comes.
+
+**It is tail insurance, not a return improver.** On every window in `backtest/data/`, firing a stop costs money — that's what a stop is. It earns its keep in the case the data does *not* contain: a decline that keeps going.
+
+The high-water mark is persisted to `bot/state/peak.json`, because a peak held only in memory rebases on restart and a bot already 19% down would start measuring from the bottom. `npm run bot:resume` rebases it deliberately — clearing a drawdown halt *is* the decision to accept the current balance as the new baseline, and without that the latch would re-fire on the next tick.
+
+**On breach they behave differently, on purpose.** The daily and drawdown stops cancel resting orders and halt but *keep the position* — halting is not the same as liquidating, and forcing an exit on a fast drawdown is usually the wrong reflex. The price stop does liquidate, with a market order, because its whole purpose is to bound a single position's loss.
 
 `GRID_STOP_PCT` is opt-in and unset by default. Without it, inventory stranded below the band is held indefinitely and `on_flat` never re-anchors — the bot idles. Setting it converts that indefinite idle into a bounded, realized loss, after which the grid is flat and free to re-centre. That's a real trade-off: it crystallises losses that might have recovered.
 

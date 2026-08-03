@@ -14,6 +14,7 @@ import {
   assertWithinBuyingPower,
   resolveRiskLimits,
   resolveStopPrice,
+  resolveDrawdown,
 } from './grid/config.js';
 import { deriveGridConfig } from './grid/sizing.js';
 import { shouldResize, canReanchor } from './grid/rebalance.js';
@@ -21,6 +22,7 @@ import { GridEngine, isOutOfBand, parseClientOrderId } from './grid/engine.js';
 
 export const HALT = Object.freeze({
   DAILY_LOSS: 'daily_loss',
+  DRAWDOWN: 'drawdown',
   STOP_PRICE: 'stop_price',
   STALLED: 'stalled',
   MANUAL: 'manual',
@@ -33,6 +35,14 @@ export const HALT = Object.freeze({
  * grid. The bot sat there looking fine while placing nothing.
  */
 export const STALL_LIMIT = 3;
+
+/**
+ * Relative rise before a new equity high-water mark is written to disk.
+ * Equity moves every tick; persisting each new high would write constantly
+ * for no benefit. The cost of the slack is that a restart can measure the
+ * drawdown from up to 0.1% below the true peak.
+ */
+export const PEAK_PERSIST_DELTA = 0.001;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -67,6 +77,19 @@ export class Runner {
     this.stalls = 0;
     /** Rejections from the most recent tick, surfaced to the dashboard. */
     this.lastRejections = [];
+    /**
+     * Equity high-water mark for the drawdown stop. Loaded from disk so a
+     * restart can't reset it and defeat the stop.
+     */
+    this.peakEquity = state.readPeakEquity?.();
+    /**
+     * Consecutive ticks out of band WHILE holding inventory, and when that
+     * run started. Idling is legitimate — the held position still needs its
+     * exit levels — but it is otherwise indistinguishable from working, and
+     * it has lasted 58 unbroken days in backtests. Tracked so it can be seen.
+     */
+    this.idleTicks = 0;
+    this.idleSince = null;
     /** Order ids already accounted for, so fills are recorded once. */
     this.seenFills = new Set();
   }
@@ -93,6 +116,15 @@ export class Runner {
         lastError: this.lastError,
         stalls: this.stalls,
         stallLimit: STALL_LIMIT,
+        /**
+         * Idling while holding is a working bot that is doing nothing. It
+         * needs to be as visible as a halt without being treated as one.
+         */
+        idleHolding: this.idleSince !== null,
+        idleTicks: this.idleTicks,
+        idleMs: this.idleMs,
+        idleSince: this.idleSince,
+        idleAlerting: this.idleAlerting,
       },
       account: t
         ? {
@@ -102,6 +134,9 @@ export class Runner {
             cash: t.cash ?? 0,
             heldValue: t.heldValue ?? 0,
             pendingValue: t.pendingValue ?? 0,
+            peakEquity: t.peakEquity ?? this.peakEquity ?? null,
+            drawdown: t.drawdown ?? 0,
+            drawdownLimit: t.drawdownLimit ?? this.env.risk?.maxDrawdownPct ?? null,
           }
         : null,
       market: t ? { price: t.price, idle: t.idle } : null,
@@ -356,6 +391,45 @@ export class Runner {
     if (this.engine && !this.dryRun) await this.engine.shutdown();
   }
 
+  /**
+   * Track the equity high-water mark, persisting only on a meaningful new
+   * high. Writing every tick would hammer the disk for a number that moves
+   * constantly; PEAK_PERSIST_DELTA is the slack we accept in exchange.
+   */
+  recordPeak(peak) {
+    const prior = this.peakEquity;
+    if (Number.isFinite(prior) && peak <= prior) return;
+
+    this.peakEquity = peak;
+    if (Number.isFinite(prior) && peak <= prior * (1 + PEAK_PERSIST_DELTA)) return;
+
+    try {
+      this.state.writePeakEquity?.(peak, { symbol: this.symbol });
+    } catch (err) {
+      this.logger.warn?.(`[runner] could not persist peak equity: ${err.message}`);
+    }
+  }
+
+  /** How long this run of idling-while-holding has lasted. */
+  get idleMs() {
+    return this.idleSince ? Date.now() - this.idleSince : 0;
+  }
+
+  /**
+   * True once idling-while-holding has run past IDLE_ALERT_HOURS.
+   *
+   * Deliberately NOT a halt. An idle grid is waiting for price to come back
+   * into a band it still holds exit levels for, and it recovers on its own
+   * the moment that happens — halting it would turn a temporary pause into a
+   * permanent one needing a human. This escalates visibility, nothing else.
+   */
+  get idleAlerting() {
+    if (!this.idleSince) return false;
+    const hours = this.env.runtime?.idleAlertHours;
+    if (!Number.isFinite(hours) || hours <= 0) return false;
+    return this.idleMs >= hours * 3600 * 1000;
+  }
+
   /** A halt latched by a previous process, if any. */
   latchedHalt() {
     try {
@@ -401,6 +475,37 @@ export class Runner {
       };
     }
 
+    // 2 — cumulative drawdown. The daily stop above measures against the
+    // prior session close and resets every day, so it cannot see a slow
+    // grind; this measures against the high-water mark and can.
+    const dd = resolveDrawdown({
+      peakEquity: this.peakEquity,
+      equity: live.equity,
+      maxDrawdownPct: this.env.risk.maxDrawdownPct,
+    });
+    this.recordPeak(dd.peak);
+
+    if (dd.breached) {
+      await this.halt(HALT.DRAWDOWN, { peak: dd.peak, drawdown: dd.drawdown });
+      this.lastTick = {
+        ...(this.lastTick ?? {}),
+        at: Date.now(),
+        equity: live.equity,
+        price: live.price,
+        dailyPnl: live.dailyPnl,
+        lossLimit: risk.maxDailyLossUsd,
+        peakEquity: dd.peak,
+        drawdown: dd.drawdown,
+      };
+      return {
+        halted: HALT.DRAWDOWN,
+        equity: live.equity,
+        peak: dd.peak,
+        drawdown: dd.drawdown,
+        limit: dd.limit,
+      };
+    }
+
     if (!this.engine) {
       await this.buildEngine(live);
       await this.engine.hydrate();
@@ -411,7 +516,7 @@ export class Runner {
       await this.ingestFills();
     }
 
-    // 2 — price stop on held inventory.
+    // 3 — price stop on held inventory.
     const stop = resolveStopPrice(this.engine.config, this.env.risk.stopPct);
     if (stop && this.engine.openInventory > 0 && live.price <= stop.stopPrice) {
       await this.liquidate(
@@ -422,7 +527,7 @@ export class Runner {
       return { halted: HALT.STOP_PRICE, price: live.price, stopPrice: stop.stopPrice };
     }
 
-    // 3 — compound into a larger size if equity has moved enough.
+    // 4 — compound into a larger size if equity has moved enough.
     const derived = deriveGridConfig({
       ratios: { ...this.env.grid, ...this.env.ratios },
       equity: live.equity,
@@ -446,7 +551,7 @@ export class Runner {
       this.logger.info?.(`[runner] resized ${change.previous.toFixed(9)} -> ${change.current.toFixed(9)} (${resize.reason})`);
     }
 
-    // 4 — re-centre the band, but only when nothing is held.
+    // 5 — re-centre the band, but only when nothing is held.
     const wantsReanchor = derived.derivation?.anchorMoved === true;
     const gate = canReanchor({
       wantsReanchor,
@@ -458,7 +563,7 @@ export class Runner {
       await this.buildEngine(live);
     }
 
-    // 5 — bring the book in line.
+    // 6 — bring the book in line.
     //
     // Exits are capped at the balance the exchange says we actually hold, not
     // at what we bought: the crypto fee is taken out of the delivered asset,
@@ -486,6 +591,20 @@ export class Runner {
       };
     }
 
+    // Out of band is only half the story. Out of band while FLAT is a grid
+    // waiting to re-anchor and costs nothing; out of band while HOLDING is
+    // capital locked in a position with no exit resting against it, and it
+    // has lasted 58 unbroken days in backtest. Only the second is tracked.
+    const idle = isOutOfBand(this.engine.config, live.price);
+    const idleHolding = idle && this.engine.openInventory > 0;
+    if (idleHolding) {
+      this.idleTicks++;
+      this.idleSince ??= Date.now();
+    } else {
+      this.idleTicks = 0;
+      this.idleSince = null;
+    }
+
     const summary = {
       tick: this.ticks,
       at: Date.now(),
@@ -497,9 +616,16 @@ export class Runner {
       dailyPnl: live.dailyPnl,
       lossLimit: risk.maxDailyLossUsd,
       stopPrice: stop?.stopPrice,
+      peakEquity: dd.peak,
+      drawdown: dd.drawdown,
+      drawdownLimit: dd.limit,
       inventory: this.engine.openInventory,
       realizedPnl: this.engine.realizedPnl,
-      idle: isOutOfBand(this.engine.config, live.price),
+      idle,
+      idleHolding,
+      idleTicks: this.idleTicks,
+      idleMs: this.idleMs,
+      idleAlerting: this.idleAlerting,
       submitted: result.submitted.length,
       cancelled: result.cancelled.length,
       rejected: this.lastRejections.length,
@@ -537,12 +663,24 @@ export class Runner {
   format(s) {
     const pnl = s.realizedPnl >= 0 ? `+$${s.realizedPnl.toFixed(2)}` : `-$${Math.abs(s.realizedPnl).toFixed(2)}`;
     const day = s.dailyPnl >= 0 ? `+$${s.dailyPnl.toFixed(2)}` : `-$${Math.abs(s.dailyPnl).toFixed(2)}`;
+
+    // "IDLE" alone reads as a moment's pause. Holding through it for days is
+    // the thing worth seeing, so the duration is part of the message.
+    let idleNote = '';
+    if (s.idleHolding) {
+      const hours = s.idleMs / 3600000;
+      const forStr = hours >= 48 ? `${(hours / 24).toFixed(1)}d` : `${hours.toFixed(1)}h`;
+      idleNote = `  ${s.idleAlerting ? '⚠ ' : ''}IDLE HOLDING ${s.inventory} for ${forStr}`;
+    } else if (s.idle) {
+      idleNote = '  idle (out of band, flat)';
+    }
+
     return (
       `[${String(s.tick).padStart(4)}] $${s.price.toFixed(2)}  ` +
       `inv ${s.inventory}  realized ${pnl}  day ${day}/$${s.lossLimit.toFixed(2)}  ` +
       `+${s.submitted}/-${s.cancelled}` +
       (s.rejected ? `  ⚠ ${s.rejected} REJECTED (stall ${s.stalls}/${STALL_LIMIT})` : '') +
-      (s.idle ? '  IDLE (out of band)' : '')
+      idleNote
     );
   }
 }

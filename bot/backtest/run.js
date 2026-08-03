@@ -37,7 +37,10 @@ const money = (n) => (n < 0 ? '-' : '+') + '$' + Math.abs(n).toFixed(2);
 const pct = (n) => (n < 0 ? '' : '+') + n.toFixed(2) + '%';
 
 /** Env shaped the way Runner expects, without touching process.env. */
-function backtestEnv({ symbol, levels, spacing, band, allocation, anchorMode, stopPct, minNotional }) {
+function backtestEnv({
+  symbol, levels, spacing, band, allocation, anchorMode,
+  stopPct, minNotional, dailyPct, drawdownPct,
+}) {
   return {
     tradingMode: 'paper',
     grid: { symbol, levels, spacing },
@@ -50,7 +53,13 @@ function backtestEnv({ symbol, levels, spacing, band, allocation, anchorMode, st
       resizeThreshold: 0.1,
       minOrderNotional: minNotional,
     },
-    risk: { maxDailyLossPct: 1, stopPct }, // daily stop off: it is a per-DAY rule
+    // These mirror the production defaults on purpose. The daily stop used to
+    // be pinned open here because SimBroker's last_equity never moved, so the
+    // backtest silently exercised a bot with one fewer stop than the real one.
+    risk: { maxDailyLossPct: dailyPct, maxDrawdownPct: drawdownPct, stopPct },
+    // idleAlertHours is deliberately absent: idle duration is measured in wall
+    // clock, which is meaningless when six months replay in seconds. Count
+    // idle TICKS instead if you want that signal out of a backtest.
     runtime: { dryRun: false, pollIntervalMs: 0 },
   };
 }
@@ -67,9 +76,12 @@ async function runOne({ bars, config, startingCash, feeRate }) {
   // In-memory anchor store: a backtest must neither read nor write the live
   // bot/state/anchor.json. It previously did both, via the shared Runner.
   const anchors = new Map();
+  let peakEquity;
   const state = {
     readAnchor: (sym) => anchors.get(sym),
     writeAnchor: (sym, price) => anchors.set(sym, price),
+    readPeakEquity: () => peakEquity,
+    writePeakEquity: (equity) => { peakEquity = equity; },
   };
 
   const runner = new Runner({ env: backtestEnv(config), client: broker, logger: silent, state });
@@ -183,6 +195,21 @@ async function main() {
   console.log(`  price $${d.first.toFixed(0)} -> $${d.last.toFixed(0)}  (${pct(d.changePct)})   range $${d.low.toFixed(0)}–$${d.high.toFixed(0)}  (${d.rangePct.toFixed(1)}% wide)`);
   console.log(`  starting cash $${startingCash.toFixed(2)}  ·  fee ${(feeRate * 100).toFixed(2)}%/side`);
 
+  // Stops default OFF, and that is a measurement decision rather than a claim
+  // that they don't matter. A halt is TERMINAL — production latches it to disk
+  // and waits for `npm run bot:resume` — so one bad day ends a six-month run.
+  // Left on by default, this reports "time until the first 5% day" instead of
+  // how the grid performed. Switch them on to evaluate the stops themselves;
+  // the header below always states which were active, so a run can't quietly
+  // look like it was protected when it wasn't.
+  //
+  // The daily stop has no "off" value of its own (it's a ratio in (0,1]), so
+  // 1 — lose the entire account in one session — stands in for disabled.
+  const dailyPct = args.daily === undefined || args.daily === 'off' ? 1 : Number(args.daily);
+  const drawdownPct = args.drawdown === undefined || args.drawdown === 'off'
+    ? undefined
+    : Number(args.drawdown);
+
   const base = {
     symbol,
     spacing: args.spacing ?? 'geometric',
@@ -190,7 +217,15 @@ async function main() {
     anchorMode: args.anchor ?? 'on_flat',
     stopPct: args.stop === undefined ? undefined : Number(args.stop),
     minNotional: Number(args.minNotional ?? 10),
+    dailyPct,
+    drawdownPct,
   };
+
+  console.log(
+    `  daily stop ${dailyPct >= 1 ? 'off' : (dailyPct * 100).toFixed(1) + '%'}` +
+    `  ·  drawdown stop ${drawdownPct === undefined ? 'off' : (drawdownPct * 100).toFixed(1) + '%'}` +
+    `  ·  price stop ${base.stopPct === undefined ? 'off' : (base.stopPct * 100).toFixed(1) + '%'}`,
+  );
 
   const combos = args.sweep
     ? [

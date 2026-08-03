@@ -123,6 +123,42 @@ export function resolveRiskLimits(risk, equity) {
 }
 
 /**
+ * Peak-to-trough drawdown against the equity high-water mark.
+ *
+ * This is the stop the DAILY one structurally cannot be. `maxDailyLossPct`
+ * measures against the prior session close, so it resets every day and is
+ * blind to a slow grind: -3% a day for ten days is a quarter of the account
+ * and never trips a 5% daily limit. Measured on the bundled datasets, BTC
+ * 2026 drew down 7.5% peak-to-trough with no single day worse than -3.1%.
+ *
+ * The peak is clamped up to current equity, so a missing or stale stored
+ * peak can only ever UNDERSTATE the drawdown — it can't invent a breach.
+ *
+ * @param {object} opts
+ * @param {number} [opts.peakEquity]      high-water mark, persisted
+ * @param {number} opts.equity            live equity
+ * @param {number} [opts.maxDrawdownPct]  undefined disables the stop
+ * @returns {{ peak: number, drawdown: number, limit: number|null, breached: boolean }}
+ */
+export function resolveDrawdown({ peakEquity, equity, maxDrawdownPct }) {
+  assert(Number.isFinite(equity) && equity > 0, `equity must be positive, got ${equity}.`);
+
+  const peak = Math.max(Number.isFinite(peakEquity) ? peakEquity : 0, equity);
+  const drawdown = peak > 0 ? (peak - equity) / peak : 0;
+
+  if (maxDrawdownPct === undefined || maxDrawdownPct === null) {
+    return { peak, drawdown, limit: null, breached: false };
+  }
+
+  assert(
+    Number.isFinite(maxDrawdownPct) && maxDrawdownPct > 0 && maxDrawdownPct <= 1,
+    `MAX_DRAWDOWN_PCT must be a ratio in (0, 1], got ${maxDrawdownPct}.`,
+  );
+
+  return { peak, drawdown, limit: maxDrawdownPct, breached: drawdown >= maxDrawdownPct };
+}
+
+/**
  * Price at which stranded inventory is cut, derived from the band the same
  * way the bounds are — so it rescales whenever the band does.
  *

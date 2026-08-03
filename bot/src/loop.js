@@ -17,6 +17,7 @@ import { createApiServer } from './api/server.js';
 
 const HALT_MESSAGE = {
   [HALT.DAILY_LOSS]: 'daily loss limit reached — resting orders cancelled, position kept',
+  [HALT.DRAWDOWN]: 'equity fell too far below its high-water mark — orders cancelled, position kept',
   [HALT.STOP_PRICE]: 'price stop hit — inventory liquidated',
   [HALT.STALLED]: 'every order rejected for 3 consecutive ticks',
   [HALT.MANUAL]: 'stopped by request',
@@ -30,6 +31,9 @@ async function main() {
   console.log(`\n▲ Apex Trader 2.0  ·  mode=${env.tradingMode}  ·  ${env.grid.symbol}`);
   console.log(`  poll every ${env.runtime.pollIntervalMs}ms  ·  anchor=${env.ratios.anchorMode}  ·  resize=${env.ratios.resizeMode}`);
   console.log(`  daily stop ${(env.risk.maxDailyLossPct * 100).toFixed(1)}% of equity` +
+    (env.risk.maxDrawdownPct
+      ? `  ·  drawdown stop ${(env.risk.maxDrawdownPct * 100).toFixed(1)}% from peak`
+      : '  ·  no drawdown stop') +
     (env.risk.stopPct ? `  ·  price stop ${(env.risk.stopPct * 100).toFixed(1)}% below band` : '  ·  no price stop'));
 
   if (env.runtime.dryRun) {

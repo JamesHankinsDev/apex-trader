@@ -59,6 +59,13 @@ export function createApiServer({
     // ok reflects TRADING health, not process liveness. A halted bot is a
     // process that is up and doing nothing — reporting ok:true there means a
     // platform health check treats a dead strategy as healthy and never pages.
+    //
+    // `idleHolding` is reported but deliberately does NOT clear `ok`. An idle
+    // grid is waiting for price to re-enter a band it still holds exit levels
+    // for, and it recovers by itself — unlike a halt, which needs a human.
+    // Failing the probe would have the platform restart a bot that is working
+    // as designed, and a restart loop is worse than the thing being reported.
+    // `degraded` is the field to alert on if you want to be paged for it.
     '/health': () => ({
       ok: !runner.halted,
       running: runner.running,
@@ -66,6 +73,9 @@ export function createApiServer({
       dryRun: runner.dryRun,
       ticks: runner.ticks,
       uptimeMs: Date.now() - runner.startedAt,
+      degraded: runner.idleAlerting,
+      idleHolding: runner.idleSince !== null,
+      idleMs: runner.idleMs,
     }),
     '/state': () => runner.snapshot(),
     '/grid': () => {

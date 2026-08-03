@@ -83,6 +83,21 @@ function pct(key, fallback) {
   return parsed;
 }
 
+/**
+ * Like pct(), but the stop it configures can be switched OFF explicitly.
+ *
+ * A safety net that defaults ON needs a documented way to disable it, and
+ * `MAX_DRAWDOWN_PCT=0` is what someone reaches for — pct() rejects that as
+ * out of range, which reads as a config error rather than "off".
+ */
+function pctOrOff(key, fallback) {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const v = raw.trim().toLowerCase();
+  if (v === 'off' || v === 'none' || v === '0' || v === 'false') return undefined;
+  return pct(key, fallback);
+}
+
 /** Defaults to `fallback`; only an explicit false-y word turns it off. */
 function bool(key, fallback) {
   const raw = process.env[key];
@@ -214,6 +229,29 @@ export function loadEnv() {
       /** Optional hard dollar floor, independent of equity. */
       maxDailyLossUsd: optionalNum('MAX_DAILY_LOSS_USD'),
       /**
+       * Halt if equity falls this far below its high-water mark.
+       *
+       * MAX_DAILY_LOSS_PCT resets every session, so it is blind to a slow
+       * grind: losing 3% a day for ten days never trips a 5% daily stop but
+       * costs a quarter of the account. Measured on the bundled datasets —
+       * BTC 2026 drew down 7.5% peak-to-trough with no single day worse than
+       * -3.1%, so the daily stop never fired once.
+       *
+       * Defaults ON at 20%, calibrated to sit ABOVE every drawdown seen in
+       * normal operation on the bundled datasets (BTC peaked at 8.4%, ETH at
+       * 16.3%) so it does not interrupt a working grid, while still bounding
+       * a collapse. A tighter 15% halts the ETH 2024 run near the bottom and
+       * turns -7.45% into -13.73% — the recovery never happens.
+       *
+       * This is tail insurance, not a return improver: on every window we
+       * have, firing it costs money. It earns its keep in the case the data
+       * does NOT contain — a decline that keeps going.
+       *
+       * Set MAX_DRAWDOWN_PCT=off to disable. Like the daily stop it HALTS —
+       * cancels resting orders, keeps the position — it never liquidates.
+       */
+      maxDrawdownPct: pctOrOff('MAX_DRAWDOWN_PCT', 0.20),
+      /**
        * Price stop, as a fraction below the band's lower bound. Rescales with
        * the band, exactly like the bounds themselves. Opt-in: unset means the
        * bot holds stranded inventory indefinitely rather than realizing a loss.
@@ -225,6 +263,15 @@ export function loadEnv() {
       dryRun: bool('DRY_RUN', true),
       pollIntervalMs: num('POLL_INTERVAL_MS', 5000),
       logLevel: optional('LOG_LEVEL', 'info'),
+      /**
+       * Hours of idling-while-holding before the bot reports itself degraded.
+       *
+       * Idle is a legitimate state — price left the band and the position
+       * still needs its exit levels — but it is indistinguishable from
+       * working. Backtests spent up to 58 unbroken days here while /health
+       * reported ok. This is the threshold at which that becomes visible.
+       */
+      idleAlertHours: num('IDLE_ALERT_HOURS', 24),
       /**
        * Railway, Render, Fly and Heroku all inject PORT and route to it.
        * Honour that first, or the platform health check hits a closed port

@@ -50,6 +50,34 @@ export function writeAnchor(symbol, price, meta = {}) {
   return writeState('anchor', all);
 }
 
+/* ---- Equity high-water mark ---------------------------------------------
+   The drawdown stop measures against the highest equity ever seen, so the
+   peak MUST outlive the process. Held only in memory, every restart would
+   reset it to current equity and a bot that had already given back 14% would
+   start measuring from the bottom — the stop would never fire. Same failure
+   the halt latch exists to prevent, one value over. */
+
+export function readPeakEquity() {
+  const p = readState('peak', null);
+  return Number.isFinite(p?.equity) ? p.equity : undefined;
+}
+
+export function writePeakEquity(equity, meta = {}) {
+  return writeState('peak', { equity, at: new Date().toISOString(), ...meta });
+}
+
+/**
+ * Forget the high-water mark, so the next tick rebases it on live equity.
+ *
+ * Required to make a drawdown halt clearable at all: the latch would come
+ * straight back otherwise, because equity is still the same distance below
+ * the same peak. Clearing that halt IS the decision to accept the current
+ * balance as the new baseline, so this is part of it — see resume.js.
+ */
+export function clearPeakEquity() {
+  return writeState('peak', {});
+}
+
 /* ---- Halt latch ---------------------------------------------------------
    A halt must SURVIVE the process. Platforms restart on non-zero exit, so an
    in-memory halt is undone by the supervisor seconds later — and after a price
