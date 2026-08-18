@@ -15,6 +15,8 @@
 
    Paper accounts only — it refuses to run against live. */
 
+import { fileURLToPath } from 'node:url';
+
 import { loadAlpacaEnv, EnvError } from '../utils/env.js';
 import { createClient, AlpacaError } from './alpaca.js';
 
@@ -125,15 +127,30 @@ async function main() {
   console.log('');
 }
 
-main().catch((err) => {
-  if (err instanceof EnvError) {
-    console.error(`\n✖ ${err.name}: ${err.message}\n`);
+/* Only probe when RUN as a script, never when imported.
+ *
+ * tests/stall.test.js imports parseNotionalFloor from this file, and an
+ * unguarded main() meant that import ran the whole probe as a side effect:
+ *
+ *   - in CI, with no credentials, loadAlpacaEnv() threw and process.exit(1)
+ *     took the test runner down with it. Every push has failed since the
+ *     workflow was added.
+ *   - locally, with credentials present, it was worse than a failure — it
+ *     quietly SUBMITTED probe orders to the paper account on every `npm test`.
+ *     They are rejected by construction and cancelled, but a test suite has no
+ *     business talking to the exchange at all.
+ */
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    if (err instanceof EnvError) {
+      console.error(`\n✖ ${err.name}: ${err.message}\n`);
+      process.exit(1);
+    }
+    if (err instanceof AlpacaError) {
+      console.error(`\n✖ Alpaca (${err.status ?? 'no response'}) on ${err.endpoint}: ${err.message}\n`);
+      process.exit(1);
+    }
+    console.error(err);
     process.exit(1);
-  }
-  if (err instanceof AlpacaError) {
-    console.error(`\n✖ Alpaca (${err.status ?? 'no response'}) on ${err.endpoint}: ${err.message}\n`);
-    process.exit(1);
-  }
-  console.error(err);
-  process.exit(1);
-});
+  });
+}
