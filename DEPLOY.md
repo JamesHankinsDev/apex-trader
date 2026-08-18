@@ -176,26 +176,40 @@ second deploy target. Pushing to `main` ships it.
 | `/m/live` | wired to the bot — equity, grid ladder, position, risk, fills |
 | `/m/assets`, `/m/market`, `/m/bots`, `/m/stats` | empty states saying what is missing and why |
 
-### 1. Deployment Protection — check this first
+### 1. Deployment Protection — what it actually does here
 
-**This is the thing that will stop it working on a phone.** Vercel →
-Project → Settings → Deployment Protection.
+Vercel → Project → Settings → Deployment Protection. The API reports this
+project as:
 
-If **Vercel Authentication** is on, `*.vercel.app` serves a login wall to
-anyone not signed into Vercel in that browser. On a desktop you never notice,
-because you are already signed in. On a phone you get a login page instead of
-the app, and once it is on the home screen it fails silently in standalone
-mode.
+```
+ssoProtection:      enabled: true,  deploymentType: "all_except_custom_domains"
+passwordProtection: enabled: false
+trustedIps:         enabled: false
+```
 
-Three ways out, in order of preference:
+**Read that and you would expect a Vercel login wall on every `*.vercel.app`
+URL. There isn't one.** All four aliases serve the app unauthenticated —
+verified by fetching each one:
 
-1. **Sign into Vercel once in mobile Safari.** Keeps the protection, costs one
-   login, persists. Do this first — it is reversible and proves the deploy
-   works before you change any settings.
-2. **Add a custom domain.** The setting is `all_except_custom_domains`, so a
-   custom domain bypasses it without turning anything off.
-3. **Turn Vercel Authentication off for Production.** Simplest, and see the
-   next section before you do.
+| URL | |
+|---|---|
+| `apex-trader-dashboard-eight.vercel.app` | 200 |
+| `apex-trader-dashboard-jameshankinsdevs-projects.vercel.app` | 200 |
+| `apex-trader-dashboard-git-main-…vercel.app` | 200 |
+| `apex-trader-dashboard-i1zyqhnfe-…vercel.app` (raw deployment URL) | 200 |
+
+So the setting is reported but not enforced on this plan. Nothing needs
+changing to reach the app from a phone — but **do not trust the settings page
+to tell you whether the dashboard is reachable.** Check it the way this table
+was built:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://<your-url>/m/live
+```
+
+`200` is open. `401` means protection has started being enforced, and the
+fastest fix is to sign into Vercel once in mobile Safari — it persists, and
+it is reversible in a way that turning the setting off is not.
 
 ### 2. This dashboard is public by choice
 
@@ -220,7 +234,8 @@ nobody has guessed yet.
 
 ### 3. Install it
 
-iOS Safari → Share → **Add to Home Screen**.
+Open **https://apex-trader-dashboard-eight.vercel.app/m/live** in iOS Safari,
+then Share → **Add to Home Screen**.
 
 `app/manifest.js` sets `display: standalone` and `start_url: /m/live`, so it
 opens chromeless on the live view rather than on the build-status page at `/`.
