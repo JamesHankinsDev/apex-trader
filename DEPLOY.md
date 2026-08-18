@@ -48,11 +48,35 @@ Leave the build command empty. Railway runs `npm ci` at the repo root, which ins
 
 ### 3. ⚠️ Add the volume — do this before the first real run
 
-**Settings → Volumes → New Volume**, mount path:
+**Volumes are not under Settings.** They are created from the project canvas,
+which is why looking through the service's settings tabs finds nothing:
+
+1. Open the project canvas (the view showing your service as a card).
+2. Press **⌘K** for the command palette, *or* **right-click on empty canvas**.
+3. Choose **Volume**.
+4. Pick the service to attach it to when prompted.
+5. Set the mount path on the service:
 
 ```
 /app/bot/state
 ```
+
+Plan limits, in case the option is greyed out: **Free allows 1 volume per
+project, Trial 3**, and a service can have only one volume.
+
+Four things worth knowing before you attach it:
+
+- **Volumes and replicas are mutually exclusive.** Not a problem here — step 5
+  already pins this service to 1 replica, and two replicas would double every
+  order anyway.
+- **A service with a volume takes downtime on redeploy**, healthcheck or not.
+  Also fine here, and arguably better: the restart policy note below wants the
+  old container stopped before the new one starts, precisely so two loops
+  never reconcile the same book at once.
+- Volumes mount at container **start**, not build. Nothing written during
+  build or a pre-deploy command survives.
+- If the service runs as a non-root user, set `RAILWAY_RUN_UID=0` or the
+  mount will not be writable.
 
 Skip this and the container filesystem resets on every deploy, which wipes:
 
