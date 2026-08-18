@@ -15,7 +15,7 @@ const STEPS = [
   { label: 'Order placement + fill tracking', done: true },
   { label: 'Run loop + daily and price stops', done: true },
   { label: 'Dashboard API endpoints', done: true },
-  { label: 'Port prototype to real data', done: false },
+  { label: 'Port prototype to real data — live tab wired, 4 tabs empty', done: false },
   { label: '6-month backtest harness', done: false },
 ];
 
@@ -76,6 +76,26 @@ export default function Home() {
           }}
         >
           Watch the bot live
+        </a>
+
+        <a
+          href="/m/live"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 12,
+            marginRight: 10,
+            padding: '10px 14px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--brand-border)',
+            background: 'var(--brand-surface)',
+            font: '600 13px var(--font-sans)',
+            color: 'var(--brand-text)',
+          }}
+        >
+          Open the mobile app
+          <span style={{ font: '11px var(--font-mono)', color: 'var(--text-400)' }}>real data</span>
         </a>
 
         <a

@@ -333,7 +333,14 @@ Every number it shows is fake. `app/data.js` is a deterministic mock layer and `
 
 Treat it as a visual reference, not a dashboard.
 
-**3. The prototype is not ported to Next.js.** The components can't be imported as modules:
+**3. The prototype is only partly ported to Next.js.** The mobile live view at
+`/m/live` is real — it reads the bot through the same proxy `/live` uses, and
+the design-system primitives it needs (`Icon`, `Badge`, `PriceChange`,
+`Sparkline`) are ported into `dashboard/app/components/ds/`. The other four
+tabs are empty states. Everything under `public/prototype/` is still the
+vendored browser bundle and still shows mock data.
+
+What remains unported can't be imported as modules:
 
 - Each is an IIFE attaching to `window.*` — no `import`/`export` anywhere.
 - They read a global `React` rather than importing it.
@@ -363,6 +370,8 @@ Upstream source: `claude.ai/design/p/0dc922ad-d90b-49a0-82c3-a20c7a389ff4`. A se
 - [x] Run loop + daily and price stops
 - [x] Dashboard API endpoints + live monitor page
 - [x] 6-month backtest harness
-- [ ] Port prototype components to ES modules, on real data
+- [x] Port design-system primitives to ES modules
+- [x] Mobile app shell + live view on real data (`/m/live`)
+- [ ] Mobile assets / market / bots / stats tabs
+- [ ] Persist fill history — the snapshot carries only the last 50
 - [ ] Deploy (Railway + Vercel)
-- [x] 6-month backtest harness

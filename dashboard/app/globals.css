@@ -239,6 +239,15 @@ a { color: var(--brand-text); text-decoration: none; }
   letter-spacing: -0.01em;
 }
 
+/* Live-state pulse. Mirrored from the design system's motion tokens
+   (public/prototype/_ds/apex/tokens/motion.css) — change one, change both.
+   The reduced-motion override there is folded into the global one below. */
+@keyframes apex-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.apex-pulse { animation: apex-pulse 1.4s var(--ease-in-out) infinite; }
+
 /* Ambient brand glow used on app backgrounds. */
 .apex-ambient {
   background:

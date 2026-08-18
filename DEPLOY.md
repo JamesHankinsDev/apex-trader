@@ -78,8 +78,8 @@ Confirm Railway's app root is `/app` (Settings → shows the working directory).
 | `API_HOST` | `0.0.0.0` | |
 | `DASHBOARD_ORIGIN` | your Vercel URL | after Part 2; `*` is acceptable while testing |
 | `GRID_SYMBOL` | `BTC/USD` | |
-| `GRID_LEVELS` | `6` | |
-| `GRID_BAND_PCT` | `0.10` | |
+| `GRID_LEVELS` | `6` | the `$10` notional floor caps it here at ~$100 equity |
+| `GRID_BAND_PCT` | `0.04` | a 1.61% step. `0.10` is 4.10%, wider than BTC's median daily range — the grid stops filling |
 | `GRID_ALLOCATION_PCT` | `0.80` | |
 | `GRID_ANCHOR_MODE` | `on_flat` | |
 | `GRID_STOP_PCT` | `0.15` | |
@@ -160,6 +160,90 @@ If it says **"Bot is not reachable"**:
 - `curl` the Railway `/health` directly to isolate which side is broken
 
 Then set `DASHBOARD_ORIGIN` on Railway to your Vercel URL and redeploy the bot.
+
+---
+
+## Part 3 — the mobile view
+
+The mobile app is **routes in the same Next project** as the dashboard —
+`app/m/*`, sharing the same server-side proxy and the same bot snapshot. There
+is nothing to provision: no Railway change, no new environment variables, no
+second deploy target. Pushing to `main` ships it.
+
+| Route | What it is |
+|---|---|
+| `/m` | redirects to `/m/live` |
+| `/m/live` | wired to the bot — equity, grid ladder, position, risk, fills |
+| `/m/assets`, `/m/market`, `/m/bots`, `/m/stats` | empty states saying what is missing and why |
+
+### 1. Deployment Protection — check this first
+
+**This is the thing that will stop it working on a phone.** Vercel →
+Project → Settings → Deployment Protection.
+
+If **Vercel Authentication** is on, `*.vercel.app` serves a login wall to
+anyone not signed into Vercel in that browser. On a desktop you never notice,
+because you are already signed in. On a phone you get a login page instead of
+the app, and once it is on the home screen it fails silently in standalone
+mode.
+
+Three ways out, in order of preference:
+
+1. **Sign into Vercel once in mobile Safari.** Keeps the protection, costs one
+   login, persists. Do this first — it is reversible and proves the deploy
+   works before you change any settings.
+2. **Add a custom domain.** The setting is `all_except_custom_domains`, so a
+   custom domain bypasses it without turning anything off.
+3. **Turn Vercel Authentication off for Production.** Simplest, and see the
+   next section before you do.
+
+### 2. This dashboard is public by choice
+
+There is **no auth in front of the dashboard itself** — no middleware, nothing.
+`BOT_API_TOKEN` protects the *bot*, not the page. If you turn Deployment
+Protection off, anyone with the URL can read your equity, open position,
+resting orders and fill history.
+
+That was a deliberate call, on these grounds:
+
+- The proxy at `app/api/bot/[...path]/route.js` is **GET-only**, and the bot
+  API returns `405 This API is read-only.` for anything else (`server.js:109`).
+  Worst case is disclosure, never control. Nobody can move your money with it.
+- The proxy has an **allowlist** — `health`, `state`, `grid`, `position`,
+  `fills`. Nothing else is reachable, whatever is added to the bot later.
+- It is a paper account.
+
+**Revisit this the moment either of those stops being true** — a real-money
+`TRADING_MODE=live`, or a write path added to the API. At that point the
+honest fix is Vercel Password Protection or an auth middleware, not a URL
+nobody has guessed yet.
+
+### 3. Install it
+
+iOS Safari → Share → **Add to Home Screen**.
+
+`app/manifest.js` sets `display: standalone` and `start_url: /m/live`, so it
+opens chromeless on the live view rather than on the build-status page at `/`.
+`app/apple-icon.png` is the home-screen icon; without it iOS uses a screenshot
+of the page.
+
+Note the manifest requires HTTPS to take effect, which Vercel gives you — over
+plain `http://` on a LAN it is ignored and you get a bookmark instead.
+
+### 4. Verify on the actual device
+
+Browser DevTools cannot check the first two of these. They need a real phone:
+
+- [ ] The bottom nav clears the home indicator and is not cut off. This depends
+      on `viewport-fit=cover` in `app/m/layout.js` — without it iOS reports
+      every `env(safe-area-inset-*)` as `0px` and the nav sits underneath.
+- [ ] Pinch-zoom still works. It is deliberately not disabled; if a future
+      change adds `maximumScale`/`userScalable: false` to stop rubber-banding,
+      that is a WCAG 1.4.4 failure and `overscroll-behavior` is the right tool.
+- [ ] The status chip reads **live**, not **dry run**. A dry-run chip in
+      production means `DRY_RUN=false` did not take on Railway.
+- [ ] The ladder shows a `SPOT` row between two levels, with `held` and
+      `buy`/`sell` tags where you expect them.
 
 ---
 

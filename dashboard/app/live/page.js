@@ -10,17 +10,15 @@
    channel. Stat tiles are hero numbers rather than charts: the job is "what
    is it right now", which a number answers better than a plot. */
 
-import { useEffect, useState, useCallback } from 'react';
-
-const POLL_MS = 2000;
-
-const money = (n, dp = 2) =>
-  Number(n ?? 0).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
-
-/** Always emits a sign, so direction survives without colour. */
-const signed = (n, dp = 2) => `${Number(n) >= 0 ? '+' : '−'}$${money(Math.abs(Number(n ?? 0)), dp)}`;
-
-const toneFor = (n) => (Number(n) > 0 ? 'var(--up-500)' : Number(n) < 0 ? 'var(--down-500)' : 'var(--text-500)');
+import { useState } from 'react';
+import {
+  useBotState,
+  deriveStatus,
+  money,
+  signed,
+  toneFor,
+  POLL_MS,
+} from '../components/use-bot-state.js';
 
 function Tile({ label, value, sub, tone, footer }) {
   return (
@@ -258,39 +256,15 @@ function CapitalSplit({ snapshot }) {
   );
 }
 
+/**
+ * The bot's state in one pill.
+ *
+ * The ladder that decides what to say lives in components/use-bot-state.js so
+ * this page and the mobile one cannot disagree about what "running" means.
+ * This renders the fuller `word — detail` form; the mobile chip shows `word`.
+ */
 function StatusPill({ snapshot, error, waitedMs }) {
-  let word = 'connecting';
-  let tone = 'var(--text-400)';
-
-  if (error) {
-    word = 'bot offline';
-    tone = 'var(--down-500)';
-  } else if (!snapshot) {
-    // Never let "connecting" sit there forever saying nothing. If the first
-    // poll has not returned in a few seconds, that IS the diagnosis.
-    if (waitedMs > 6000) {
-      word = 'no response from /api/bot/state';
-      tone = 'var(--down-500)';
-    }
-  } else if (!snapshot.status) {
-    word = 'unexpected response shape';
-    tone = 'var(--down-500)';
-  } else if (snapshot?.status?.halted) {
-    word = `halted — ${snapshot.status.halted.replace(/_/g, ' ')}`;
-    tone = 'var(--down-500)';
-  } else if (snapshot?.rejections?.length) {
-    // A grid rejecting every order must never render as a healthy one.
-    word = `${snapshot.rejections.length} order(s) rejected`;
-    tone = 'var(--warning-500)';
-  } else if (snapshot?.status?.running) {
-    word = snapshot.status.dryRun ? 'running — dry run' : 'running — live orders';
-    tone = snapshot.status.dryRun ? 'var(--info-500)' : 'var(--up-500)';
-  } else {
-    // Reached the bot, but its loop is not running and it is not halted.
-    // This used to fall through to "connecting", which hid the problem.
-    word = `reachable, not running (tick ${snapshot.status.ticks ?? 0})`;
-    tone = 'var(--warning-500)';
-  }
+  const { word, detail, tone } = deriveStatus({ snapshot, error, waitedMs });
 
   return (
     <span
@@ -307,7 +281,7 @@ function StatusPill({ snapshot, error, waitedMs }) {
       }}
     >
       <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: tone }} />
-      {word}
+      {detail ? `${word} — ${detail}` : word}
     </span>
   );
 }
@@ -429,37 +403,7 @@ function Fills({ snapshot }) {
 }
 
 export default function Live() {
-  const [snapshot, setSnapshot] = useState(null);
-  const [error, setError] = useState(null);
-  const [startedAt] = useState(() => Date.now());
-  const [waitedMs, setWaitedMs] = useState(0);
-
-  const poll = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bot/state', { cache: 'no-store' });
-      const body = await res.json();
-      if (!res.ok) {
-        setError(body.error ?? `HTTP ${res.status}`);
-        return;
-      }
-      setSnapshot(body);
-      setError(null);
-    } catch (err) {
-      setError(err.message);
-    }
-  }, []);
-
-  // Drives the "no response" cutoff above.
-  useEffect(() => {
-    const id = setInterval(() => setWaitedMs(Date.now() - startedAt), 1000);
-    return () => clearInterval(id);
-  }, [startedAt]);
-
-  useEffect(() => {
-    poll();
-    const id = setInterval(poll, POLL_MS);
-    return () => clearInterval(id);
-  }, [poll]);
+  const { snapshot, error, waitedMs } = useBotState();
 
   const s = snapshot;
   const daily = s?.account?.dailyPnl ?? 0;
