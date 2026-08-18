@@ -64,6 +64,23 @@ A latch or a high-water mark is only a real safety mechanism if it outlives the 
 
 Confirm Railway's app root is `/app` (Settings → shows the working directory). If it differs, adjust the mount path to `<root>/bot/state`.
 
+**Verify the volume is actually working — the settings page is not proof.**
+State surviving is the whole point, so test the thing itself:
+
+```bash
+# 1. note the anchor the bot is using
+curl -s <bot-url>/state -H "Authorization: Bearer $API_TOKEN" \
+  | python3 -c 'import json,sys; g=json.load(sys.stdin)["grid"]; print(g["lowerBound"]/(1-0.04))'
+
+# 2. restart the Railway service, wait for it to come up, then repeat step 1
+```
+
+Same number: the volume is working. Jumped to roughly the current market
+price: `anchor.json` did not survive, the grid re-centred on restart, and
+`halt.json` and `peak.json` are equally unprotected. On 2026-08-18 this
+produced an anchor moving 63,861.79 → 64,654.45 across a restart while a
+position was open.
+
 ### 4. Set environment variables
 
 **Variables** tab. Everything else has a safe default.

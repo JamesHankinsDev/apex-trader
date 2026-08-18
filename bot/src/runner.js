@@ -268,7 +268,22 @@ export class Runner {
 
   /** Build (or rebuild) the grid from live state. */
   async buildEngine(live) {
-    const openInventory = this.engine?.openInventory ?? 0;
+    /* Ask the EXCHANGE what we hold, not just the engine.
+     *
+     * On the first tick of a process there is no engine yet — tick() calls
+     * buildEngine() and only then hydrate() — so `this.engine?.openInventory`
+     * is undefined exactly when a restart is deciding where to put the band.
+     * Falling back to 0 told resolveAnchor the grid was flat while a position
+     * was open, and on_flat re-centred out from under it, stranding the held
+     * lot with no exit levels. That is the precise failure on_flat exists to
+     * prevent, and it fired on every restart where drift exceeded the
+     * threshold. See tests/restart-anchor.test.js.
+     *
+     * readLiveState() has already fetched positions by now, so the live
+     * balance is available and is the more trustworthy answer anyway: it
+     * counts inventory this process has never seen.
+     */
+    const openInventory = this.engine?.openInventory ?? live.availableQty ?? 0;
 
     const raw = deriveGridConfig({
       ratios: { ...this.env.grid, ...this.env.ratios },
